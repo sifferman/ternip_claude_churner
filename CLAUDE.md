@@ -227,6 +227,18 @@ This list reflects lessons from this session — don't redo things in the
   semantics)
 - Asynchronous reset experiments (Xilinx UG949 §4.2 strongly recommends
   sync, especially for DSP48 / BRAM)
+- **Per-lane `stall1` in `ternip_pipelined_mem`** (build_2). Goal was to
+  break the FO=4166 `axis_tready → wdata_q1.CE` cluster by giving each
+  `data_lanes[i]` its own stall expression sourced from one lane's
+  per-lane tready. The cluster did vanish — but the placer's re-layout
+  exposed `tmatmul_operation_q[1]` → its synth-replicas at FO=322 with
+  7 LUT levels (slack -0.308) and `tmatmul_operation_q[1]` →
+  `latched_tmatmul_addrs_q.CE` at 5 LUT levels (slack -0.19). Net
+  result: WNS -0.259 → -0.308, TNS 4× worse, frequency 242.1 → 216.4
+  MHz. Don't re-apply this exact RTL change. The TCL replication in
+  `pre_phys_opt_design.tcl` (already targets `*stall1*`, `*read_valid_q*`,
+  `*pipelined_mem*`) is doing what this change attempted, and it's
+  better behaved for the placer.
 
 ### Things to try (open ideas, prioritized)
 
