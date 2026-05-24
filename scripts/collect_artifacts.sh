@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Collect build artifacts after a (successful or failed) Vivado build.
 # Produces:
-#   - hard_<tag>.csv          (per-endpoint timing CSV via vivado-read-reports)
+#   - build_<tag>.csv          (per-endpoint timing CSV via vivado-read-reports)
 #   - build.tar.gz            (tarred synth/pynqvivado_au250/build, capped size)
 #   - summary.md              (WNS/TNS/failing count + top cluster description)
 #
 # Usage: scripts/collect_artifacts.sh <tag> [config]
-#   tag    = release tag suffix (e.g. "hard_16")
+#   tag    = release tag suffix (e.g. "build_16")
 #   config = build CONFIG, default xcu250_D=1024_MaxCores
 
 set -euo pipefail

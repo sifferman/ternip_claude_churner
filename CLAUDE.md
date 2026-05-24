@@ -46,7 +46,7 @@ A bad run costs 3–4 hours plus the storage of its tarball. A great run
 costs the same. Spend the time pre-build to make sure you're getting a
 great run.
 
-## The loop (one iteration = one `hard_N` build)
+## The loop (one iteration = one `build_N` build)
 
 ```
 ┌─ Pick an optimization (see "What to try next" below)
@@ -192,7 +192,7 @@ yosys infers a multiplier either way — just as LUTs+CARRY4 instead of DSP.
 vivado -mode batch -nojournal -nolog \
     -source .claude/skills/vivado-read-reports/scripts/generate_timing_csv.tcl \
     -tclargs ternary_matmul/synth/pynqvivado_au250/build/xcu250_D=1024_OneCore/hw/_x/link/vivado/vpl/prj/prj.xpr \
-    hard_N.csv \
+    build_N.csv \
     level0_i/level1/level1_i/ulp/ternip_ip_1
 ```
 
@@ -388,7 +388,7 @@ not `MAX_FANOUT` hints.
 
 ## How to write release notes (per iteration)
 
-Title: `hard_N: <one-line change summary>`
+Title: `build_N: <one-line change summary>`
 
 Body template:
 ```
@@ -414,7 +414,7 @@ next iteration>
 ```
 
 Attach:
-- `hard_N.csv` (the timing CSV)
+- `build_N.csv` (the timing CSV)
 - `build.tar.gz` (the tarred build dir — see `scripts/collect_artifacts.sh`)
 
 ## Operational hygiene
@@ -430,3 +430,44 @@ Attach:
   not the RTL.
 - **Read the lowRISC style guide before any significant refactor**:
   [references/lowRISC-style-guide/VerilogCodingStyle.md](references/lowRISC-style-guide/VerilogCodingStyle.md).
+
+## Don't pause to ask questions
+
+This loop is meant to run unattended. **Do not invoke `AskUserQuestion`
+during iteration.** Use your best judgement for routine decisions (which
+fix to try next, how big a refactor to take on, whether to bundle vs
+split, etc.).
+
+When you hit something genuinely uncertain or worth a human decision:
+
+1. Pick a defensible default and proceed.
+2. Append a short note to `QUESTIONS.md` at the repo root describing
+   the choice point, what you decided and why, and what you would ask
+   the user if you could. They review it out of band — your job is to
+   keep moving.
+
+Reserve `AskUserQuestion` for hard blockers where you genuinely cannot
+proceed (e.g. credentials missing, the build host is unreachable).
+
+## Release body must reflect build status in real time
+
+Every release should be useful to a human who checks GitHub directly,
+**not just to you when you finish the iteration**. So:
+
+- When you create the release at build-kick time, include a "Build
+  status" section near the top with the **estimated completion
+  time** (use `scripts/eta.sh` for a wallclock figure). Refresh this
+  on each significant ETA emission if drift moves more than ~10 min.
+- The instant the build hits a terminal status (success / failure),
+  the **first action** is `gh release edit` flipping that section to
+  something like:
+
+  > Build finished, generating report. Full WNS / TNS /
+  > failing-endpoint data + CSV + tarball coming in a follow-up edit.
+
+  Only then do you generate the CSV, tar the build, and produce the
+  final release-body edit with the results.
+
+A stale "_TBD after build._" body when the build has actually
+finished is worse than no release at all — it implies the
+iteration is still running when it isn't.

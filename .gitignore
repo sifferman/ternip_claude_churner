@@ -7,12 +7,13 @@ ternip/**/build/
 ternary_matmul/build/
 ternary_matmul/**/build/
 
-# Local hard_N artifacts (committed as release assets, not tree files)
-hard_*.csv
-hard_*.log
-hard_*.xlsx
+# Local build_N artifacts (committed as release assets, not tree files)
+build_*.csv
+build_*.log
+build_*.xlsx
 build.log
 build.tar.gz
+artifacts/
 
 # Editor / OS noise
 *.swp

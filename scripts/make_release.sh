@@ -3,9 +3,9 @@
 # iteration. Attaches artifacts collected by collect_artifacts.sh.
 #
 # Usage: scripts/make_release.sh <tag> <title> <body_file>
-#   tag        = git tag (e.g. "hard_16")
+#   tag        = git tag (e.g. "build_16")
 #   title      = release title (one-line summary)
-#   body_file  = path to markdown body (e.g. artifacts/hard_16/summary.md)
+#   body_file  = path to markdown body (e.g. artifacts/build_16/summary.md)
 
 set -euo pipefail
 
