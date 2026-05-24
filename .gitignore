@@ -1,0 +1,20 @@
+# Yosys-fanout build artifacts: large JSON netlists + logs, regenerated
+# on demand. Never commit.
+.claude/skills/yosys-fanout/build/
+
+# Build artifacts from the submodules (in case anyone runs builds in-tree)
+ternip/**/build/
+ternary_matmul/build/
+ternary_matmul/**/build/
+
+# Local hard_N artifacts (committed as release assets, not tree files)
+hard_*.csv
+hard_*.log
+hard_*.xlsx
+build.log
+build.tar.gz
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store

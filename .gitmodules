@@ -1,0 +1,28 @@
+[submodule "references/lowRISC-style-guide"]
+	path = references/lowRISC-style-guide
+	url = git@github.com:lowRISC/style-guides.git
+[submodule "firesim"]
+	path = references/firesim
+	url = git@github.com:firesim/firesim.git
+[submodule "RapidStream"]
+	path = references/RapidStream
+	url = git@github.com:UCLA-VAST/RapidStream.git
+[submodule "tapa"]
+	path = references/tapa
+	url = git@github.com:UCLA-VAST/tapa.git
+[submodule "corundum"]
+	path = references/corundum
+	url = git@github.com:alexforencich/corundum.git
+[submodule "philipabbey-blog-projects"]
+	path = references/philipabbey-blog-projects
+	url = git@github.com:philipabbey/fpga.git
+[submodule "SAR-ATR-on-FPGA"]
+	path = references/SAR-ATR-on-FPGA
+	url = git@github.com:pgroupATusc/SAR-ATR-on-FPGA.git
+[submodule "ternary_matmul"]
+	path = ternary_matmul
+	url = git@github.com:sifferman/ternary_matmul_claude.git
+	branch = NumDdrBanksPerTmatmul
+[submodule "references/yosys"]
+	path = references/yosys
+	url = git@github.com:YosysHQ/yosys.git
