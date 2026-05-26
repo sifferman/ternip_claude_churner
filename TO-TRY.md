@@ -13,43 +13,37 @@ worked" (or "net-negative") list and delete the entry here.
 
 ---
 
-## Baseline timing-hygiene attributes (already in the current RTL)
+## Pre-autonomous-loop historical best (legacy `ternary_matmul4/`)
 
-Before this autonomous loop existed, a separate (now-deleted) working
-tree established the WNS floor for this design at roughly **-0.386 ns**
-using only attribute-driven hygiene — no structural refactoring,
-no lane splits, no skid modules. **All of those attributes are still
-present in our current RTL** (verified):
+For reference: before this autonomous harness was set up, the best
+WNS achieved on the original `/mada/users/esifferm/GitHub/ternary_matmul4/`
+working tree was **-0.386 ns (`hard_11.csv`, 2102 paths)**, very nearly
+matched by hard_12.csv at **-0.389 ns (2082 paths)**. All later builds
+on that tree (hard_13 / hard_14 / hard_15) came in WORSE.
 
-| Attribute / construct | Location | Purpose |
-|---|---|---|
-| `rst_nq` shift-reg with synth replication | `ternip/rtl/axi/s_axi_ternip_rst.v` | Wide-fanout reset distribution |
-| Per-block local `rst_ni_q` re-reg | `ternip_tmatmul.sv`, `ternip_rms.sv`, etc. | UG949 §4.5 pattern #3 |
-| `(* MAX_FANOUT = "25" *)` on `tmatmul/state_q` | `ternip_tmatmul.sv:142` | FSM source replication |
-| `(* MAX_FANOUT = "25" *)` on `tmatmul_operation_q` | `ternip_tmatmul.sv:160` | FSM source replication |
-| `(* MAX_FANOUT = "25" *)` on `rms_op_q` + `rms/state_q` | `ternip_rms.sv:104, 115` | FSM source replication |
-| `(* MAX_FANOUT = "25" *)` on `read_valid_q{1,2}`, `write_valid_q{1,2}` | `ternip_pipelined_mem.sv:81-86` | Wide-CE source replication |
-| `MREG=1` (DSP M-stage register) in starmul | `ternip_starmul.sv:67` | Halves the multiplier internal path |
+That hard_11/12 state predated the convert ready/valid refactor and
+the lane-split experimentation. The ONLY changes from upstream were:
 
-**Where THIS loop is vs the legacy baseline:**
+- `rst_nq` reset register: `MAX_FANOUT=10` for synth-time replication
+  close to consumers
+- Per-block local `rst_ni_q` re-registration (UG949 §4.5 pattern #3)
+  inside `ternip_tmatmul`, `ternip_rms`, etc.
+- Source-attribute `MAX_FANOUT=25` on `tmatmul/state_q` and
+  `tmatmul_operation_q`
+- `MAX_FANOUT=25` on `pipelined_mem`'s `read_valid_q1/q2` and
+  `write_valid_q1/q2`
+- `(* MAX_FANOUT = "25" *)` on `rms/rms_op_q` and rms FSM `state_q`
+- `MREG=1` (DSP M-stage register) enabled inside `ternip_starmul`
 
-| State | Best WNS | Best freq |
-|---|---:|---:|
-| Pre-loop legacy (attributes only) | -0.386 ns | (not measured at the time) |
-| 2026-05-24 5:01 AM (loop iter 1: + rms input slice) | -0.259 ns | 242.1 MHz |
-| 2026-05-26 3:13 AM (loop iter 6: stages=8 + slice) | **-0.166 ns** | 230.5 MHz |
-| 2026-05-25 6:46 PM (loop iter 3: trace_memory off) | (CSV lost) | **246.9 MHz** (peak) |
+That's it. Pure attribute-driven hygiene + one DSP register stage.
+No convert refactor, no lane modules, no `ternip_skid_lane`,
+no sig/csig PISO→SIPO pipeline reg. Cleaner RTL than today's state
+and a better build result.
 
-The autonomous loop has improved WNS by ~0.22 ns over the legacy
-baseline (with the rms input slice + the FSM hygiene stack
-intact). The legacy state's `-0.386` is no longer the bar; treat
-it as confirmation that these attributes are load-bearing —
-**do not remove any of them** when proposing future changes.
-
-**Lesson for the loop:** the structural changes have helped, but
-the attribute baseline is doing meaningful work too. If a future
-iteration regresses, suspect recent structural changes first, not
-the attribute hygiene.
+**Lesson for the autonomous loop:** simpler RTL beat the "structurally
+clean" refactor in our hands. If the loop seems to be flailing, consider
+reverting recent additions and adding them one-at-a-time — bundled
+changes mask which ones helped and which hurt.
 
 ---
 
@@ -130,31 +124,29 @@ upward or stabilize the placement-variance we saw between
 **Risk:** None — alternative strategy, same RTL, same config. If
 it doesn't help, revert the one line.
 
-### B. Enable phys_opt + route Explore directives + post-route phys_opt
+### B. Enable phys_opt + route Explore directives + post-route phys_opt — **ALREADY APPLIED (baseline)**
 
-**Where:** `synth/vivado_common/` or `kernel.cfg [vivado]` section.
-
-**What:** Per the xbtest doc:
+Verified 2026-05-26 2:05 PM: `synth/pynqvivado_common/
+generate_kernel_cfg.tcl` lines 28-52 already emit:
 ```
+[vivado]
+prop=run.__KERNEL__.{STEPS.SYNTH_DESIGN.ARGS.MORE OPTIONS}={-retiming}
+prop=run.impl_1.STEPS.OPT_DESIGN.ARGS.DIRECTIVE=Explore
+prop=run.impl_1.STEPS.PLACE_DESIGN.ARGS.DIRECTIVE=ExtraNetDelay_high
 prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.IS_ENABLED=true
-prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE=Explore
+prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE=AggressiveExplore
 prop=run.impl_1.STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE=Explore
+prop=run.impl_1.{STEPS.ROUTE_DESIGN.ARGS.MORE OPTIONS}={-tns_cleanup}
 prop=run.impl_1.STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED=true
-prop=run.impl_1.STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE=Explore
+prop=run.impl_1.STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE=AggressiveExplore
 ```
 
-`Explore` runs more aggressive optimization passes than the default
-`Default` directive. Post-route phys_opt is OFF by default (per
-Xilinx docs); enabling it gives Vivado one more pass to fix
-residual issues after routing.
-
-**Why:** "Spend more compute hours per build" lever — every option
-above costs extra build time but explores more of the placement +
-routing search space. The doc recommends them for hard-to-close
-kernels.
-
-**Risk:** Build time grows (maybe 20-40% — ~30 min per iteration
-extra). Otherwise no functional risk.
+This is **the FireSim TIMING + CONGESTION strategy already
+applied as the baseline** for every build in this loop (since
+seed commit 9b9ca24). Don't re-propose. The only directive lever
+still untried at impl-step level is `opt_design`'s additional
+flags from FireSim CONGESTION (`-hier_fanout_limit 512 -muxf_remap
+-propconst -retarget -sweep`).
 
 ### D. Alternative strategy: `Performance_ExploreWithRemap`
 
@@ -178,7 +170,18 @@ sample different placement minima.
 **Risk:** None (same as candidate A — alternative strategy, same
 RTL/config).
 
-### E. FireSim "CONGESTION" strategy: synth retiming + tight fanout cap + muxf_remap
+### E. FireSim CONGESTION extras: `opt_design` MORE_OPTIONS — **PARTIALLY APPLIED**
+
+Baseline already has: `synth_design -retiming`, `opt_design
+-directive Explore`, `phys_opt AggressiveExplore`, `route
+Explore + -tns_cleanup`, post-route phys_opt AggressiveExplore.
+What's NOT in the baseline is the `opt_design` MORE_OPTIONS set
+(`-hier_fanout_limit 512 -muxf_remap -propconst -retarget -sweep`).
+That's the remaining piece of FireSim CONGESTION.
+
+(Original full-strategy entry below preserved for reference.)
+
+### E-original. FireSim "CONGESTION" strategy: synth retiming + tight fanout cap + muxf_remap
 
 **Where:** `references/firesim/platforms/xilinx_alveo_u250/cl_firesim/
 scripts/strategies/strategy_CONGESTION.tcl`. FireSim runs on the
@@ -207,7 +210,19 @@ a chance to commit to a bad layout. Vivado users on the same part
 options are post-synth and only affect impl time. Otherwise
 no functional risk.
 
-### F. FireSim "TIMING" strategy: ExtraNetDelay_high + tns_cleanup + post-route SLL fix
+### F. FireSim TIMING strategy: SLL-reg-hold-fix — **PARTIALLY APPLIED**
+
+Baseline already has `place_design -directive ExtraNetDelay_high`
+and `route -tns_cleanup`. What's NOT in baseline is the
+`post_route_phys_opt_design -sll_reg_hold_fix` flag — the
+U250-LAGUNA-specific lever for cross-SLR hold violations. To
+apply: extend the kernel.cfg directive on
+`STEPS.POST_ROUTE_PHYS_OPT_DESIGN` to include a MORE_OPTIONS
+clause with `-sll_reg_hold_fix`.
+
+(Original full-strategy entry below preserved for reference.)
+
+### F-original. FireSim "TIMING" strategy: ExtraNetDelay_high + tns_cleanup + post-route SLL fix
 
 **Where:** `references/firesim/platforms/vitis/cl_firesim/
 build-strategies/strategy_TIMING.cfg`. Combines:
