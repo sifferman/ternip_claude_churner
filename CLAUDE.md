@@ -239,6 +239,18 @@ This list reflects lessons from this session — don't redo things in the
   semantics)
 - Asynchronous reset experiments (Xilinx UG949 §4.2 strongly recommends
   sync, especially for DSP48 / BRAM)
+- **Aggressive TCL `force_replication_on_nets` for buffer tready**
+  (2026.05.25-2137). Added a rule targeting
+  `*pipelined_mem*decoupled_ready*buffer*lanes*tready*` with
+  `FLAT_PIN_COUNT > 30` to replicate the wide-CE source FFs from
+  2026.05.24-0501's 33-endpoint cluster. Over-replicated — the
+  placer rearranged to fit the extra replicas, pushing
+  `csig_parallelized`'s PISO→csig→csig_out_q path to a much worse
+  layout. Net: WNS -0.259 → -0.719, TNS -3.873 → -151.4, failing
+  endpoints 33 → 1431, achieved 246.9 → 244.2 MHz. **Lesson**: TCL
+  `force_replication_on_nets` thresholds matter — the existing
+  pipelined_mem rule's `FLAT_PIN_COUNT > 100` is the floor for this
+  design; going lower destabilizes placement. Don't reapply.
 - **Per-lane `stall1` in `ternip_pipelined_mem`** (2026.05.24-0827). Goal was to
   break the FO=4166 `axis_tready → wdata_q1.CE` cluster by giving each
   `data_lanes[i]` its own stall expression sourced from one lane's

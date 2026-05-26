@@ -27,6 +27,30 @@ These are ideas Claude has surfaced from timing-report analysis or
 from reading CLAUDE.md "What to try next" / QUESTIONS.md. Roughly
 prioritized — top of list = highest expected impact / lowest risk.
 
+### 0. csig_parallelized PISO → csig_out_q skid revisit (newly relevant)
+
+**Where:** `ternary_matmul/third_party/ternip/rtl/math/ternip_csig_parallelized.sv`
+near the existing csig_out_q skid (lines ~108-130).
+
+**What:** 2026.05.25-2137 surfaced a 1411-endpoint cluster in
+`csig_parallelized/piso_loadstore_r/two_fifo.fifo0/head_r_reg →
+csig_out_q_reg[*]` at -0.719 ns slack. The existing comment notes a
+build_15-era 1134-path / -0.698 ns fix lived here; this seems to be
+the same cluster resurfacing under placement pressure. Options:
+- 2-deep skid (csig_out_pre_q + csig_out_q) instead of the current
+  1-deep — gives the placer more freedom to spread the PISO→csig
+  combinational cone.
+- Lane-split the PISO output bus so each lane has its own
+  csig_out_q — drops per-FF fanout from VectorParallelism to 1.
+
+**Why:** Was masked by the build_4 over-replication but the cluster
+existed already in build_1 at -0.259 ns (3rd-tier path; not WNS
+dominant). With buffer-tready and trace_memory cleaned up, this is
+plausibly the next ceiling.
+
+**Risk:** Latency change (1-cycle for the skid extension). Test
+tmatmul_tb both simulators carefully — csig is in the rowwise path.
+
 ### 1. `tmatmul_operation_q[1]` FSM transition pipelining
 
 **Where:** `ternary_matmul/third_party/ternip/rtl/fus/ternip_tmatmul.sv`,
