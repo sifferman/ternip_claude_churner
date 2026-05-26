@@ -7,7 +7,11 @@ ternip/**/build/
 ternary_matmul/build/
 ternary_matmul/**/build/
 
-# Local build_N artifacts (committed as release assets, not tree files)
+# Local per-iteration artifacts (committed as release assets, not tree files)
+# Matches YYYYMMDDHHMM-style date-code tags + legacy build_*.
+20*.csv
+20*.log
+20*.xlsx
 build_*.csv
 build_*.log
 build_*.xlsx

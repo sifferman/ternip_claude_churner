@@ -6,39 +6,39 @@ considered, and how to redirect if the user wants something different.
 
 ---
 
-## 2026-05-24 — build_2 was a regression; reverted; what's next?
+## 2026-05-24 — 202605240827 was a regression; reverted; what's next?
 
-**Outcome of build_2:** Net-negative. The per-lane `stall1` change in
+**Outcome of 202605240827:** Net-negative. The per-lane `stall1` change in
 `ternip_pipelined_mem` did eliminate the 4166-fanout
 `axis_tready → wdata_q1.CE` cluster, but the placer's re-layout exposed
 worse clusters in `tmatmul_operation_q[1]` → its replicas
 (slack -0.308 ns, 7 LUT levels) and
 `tmatmul_operation_q[1] → latched_tmatmul_addrs_q.CE` (slack -0.19 ns,
 5 LUT levels). Net: WNS -0.259 → -0.308, TNS 4× worse, frequency
-242.1 → 216.4 MHz. See build_2 release for full data.
+242.1 → 216.4 MHz. See 202605240827 release for full data.
 
 **Decision (autonomous):** Reverted the per-lane stall1 RTL change in
 ternip + ternary_matmul (kept the hard_→build_ rename in place). Pushed
-the reverts. **Did NOT kick a build_3 build.** We already have build_1
+the reverts. **Did NOT kick a 202605251846 build.** We already have 202605240501
 numbers from the same post-revert RTL state — a pure-revert build would
 just re-spend 3 hours producing data we already have.
 
 **Why not kick a new build:** The next move needs a fresh idea, not a
-re-run of build_1. Choosing what that idea is benefits from your
+re-run of 202605240501. Choosing what that idea is benefits from your
 direction — and the cost of waiting (eq2 idle) is much less than the
 cost of running an iteration in the wrong direction.
 
 **Candidate next moves (priority-ordered, my best guess):**
 
 1. **Attack `tmatmul_operation_q[1]`'s 7-LUT-level self-loop.** This
-   path (Q → 7 LUT → replica.D) is what the build_2 layout exposed and
+   path (Q → 7 LUT → replica.D) is what the 202605240827 layout exposed and
    what's gating WNS now if the placer happens to settle the same way
-   without build_2's RTL change. Likely structural fix: register the
+   without 202605240827's RTL change. Likely structural fix: register the
    FSM transition decode (insert an intermediate FF between `state_q ==
    X && tmatmul_operation_q == Y` decode and the next-state mux), or
    restructure the FSM to flatten the cone.
 2. **Address-staging FSM (`latched_tmatmul_addrs_q`, ternip_core).** CLAUDE.md
-   item #3. Wide demux with FO~410 surfaced as the WNS path in build_2.
+   item #3. Wide demux with FO~410 surfaced as the WNS path in 202605240827.
    Restructure `latched_tmatmul_addrs_d` write logic so the bank-index
    mux is registered before the wide-write FF, or split the
    `latched_tmatmul_addrs_q` array into per-bank named regs.
@@ -57,7 +57,7 @@ forward motion.
 
 ---
 
-## 2026-05-24 — build_2: per-lane stall1 vs MAX_FANOUT vs full lane-localization (resolved)
+## 2026-05-24 — 202605240827: per-lane stall1 vs MAX_FANOUT vs full lane-localization (resolved)
 
 **Decision:** Expose per-lane `lane_in_ready_o` from
 `ternip_pipelined_interconnect` and compute a per-lane stall1 in

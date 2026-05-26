@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Collect build artifacts after a (successful or failed) Vivado build.
 # Produces:
-#   - build_<tag>.csv          (per-endpoint timing CSV via vivado-read-reports)
+#   - <tag>.csv                (per-endpoint timing CSV via vivado-read-reports)
 #   - build.tar.gz            (tarred synth/pynqvivado_au250/build, capped size)
 #   - summary.md              (WNS/TNS/failing count + top cluster description)
 #
