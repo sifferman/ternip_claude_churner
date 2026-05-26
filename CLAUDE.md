@@ -383,10 +383,27 @@ not `MAX_FANOUT` hints.
 
 ## How to write release notes (per iteration)
 
-Title: `YYYY.MM.DD-HHMM: <one-line change summary>`
+Title: `YYYY.MM.DD-HH:MM: <one-line change summary>` (title can use
+the colon since it's not a git ref; the tag itself is
+`YYYY.MM.DD-HHMM`).
+
+Body conventions:
+- **Free-text wall-clock**: `2026-05-25 6:46 PM PDT` (year-included,
+  AM/PM, never 24-hour).
+- **Table column headers**: `2026-05-24 5:01 AM (previous)` /
+  `2026-05-25 6:46 PM (current)` — readable date + role label,
+  never the bare tag code.
+- **Cross-reference body text**: the tag form
+  `2026.05.24-05:01` is fine inline (matches the GitHub URL), or
+  the readable date — pick whichever flows better.
 
 Body template:
 ```
+## Build status
+**Build kicked off 2026-MM-DD H:MM AM/PM PDT**, expected completion
+~H:MM AM/PM PDT (reference 2h 52m). Flips to "finished, generating
+report" the instant the build hits a terminal state.
+
 ## Change
 <2-3 sentences. What was modified, where, and why.>
 
@@ -394,23 +411,32 @@ Body template:
 - ternip: <link to ternip commit>
 - ternary_matmul: <link to ternary_matmul commit>
 
+## Pre-build verification
+<table of lint + sims results>
+
 ## Results
-- WNS: <ns>
-- TNS: <ns>
-- Failing endpoints: <count>
-- Frequency: <MHz> (post AUTO-FREQ-SCALING if any)
+| Metric | 2026-MM-DD H:MM AM/PM (previous) | 2026-MM-DD H:MM AM/PM (current) | Δ |
+|---|---:|---:|---:|
+| **WNS** (kernel scope, ns) | ... |
+| **TNS** (kernel scope, ns) | ... |
+| **Failing endpoints** | ... |
+| **Achieved frequency** (MHz) | ... |
+| Build time | ... |
+| Config | ... | ... | — |
 
 ## Top failing cluster
 <1-3 paragraphs describing what's failing now and a hypothesis for the
 next iteration>
 
 ## Build notes
-<segfault? cosmetic XRT error? warnings? anything you noted>
+<segfault? cosmetic XRT error? AUTO-FREQ-SCALING value?
+anything you noted>
 ```
 
 Attach:
 - `YYYY.MM.DD-HHMM.csv` (the timing CSV)
 - `build.tar.gz` (the tarred build dir — see `scripts/collect_artifacts.sh`)
+- `build.log` (snapshot before kicking the next build)
 
 ## Operational hygiene
 
