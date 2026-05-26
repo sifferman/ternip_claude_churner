@@ -101,7 +101,7 @@ if last:
     eta_adj = start_ts + datetime.timedelta(minutes=REF_TOTAL_MIN + max(drift_min, 0))
     remain_adj_s = (eta_adj - now).total_seconds()
     label = pattern.split('.*')[0][:55]
-    print(f"ETA: elapsed {elapsed_min:5.1f} min | last marker: {label!r} (ref +{off} min, {hit_str}) | reference-ETA {eta_ref.strftime('%H:%M')} | drift-adj ETA {eta_adj.strftime('%H:%M')} ({remain_adj_s/60:.0f} min remaining)")
+    print(f"ETA: elapsed {elapsed_min:5.1f} min | last marker: {label!r} (ref +{off} min, {hit_str}) | reference-ETA {eta_ref.strftime('%-I:%M %p')} | drift-adj ETA {eta_adj.strftime('%-I:%M %p')} ({remain_adj_s/60:.0f} min remaining)")
 else:
-    print(f"ETA: elapsed {elapsed_min:5.1f} min | pre-Vivado phase ({start_src}) | reference-ETA {eta_ref.strftime('%H:%M')} ({remain_ref_s/60:.0f} min remaining if Vivado started now)")
+    print(f"ETA: elapsed {elapsed_min:5.1f} min | pre-Vivado phase ({start_src}) | reference-ETA {eta_ref.strftime('%-I:%M %p')} ({remain_ref_s/60:.0f} min remaining if Vivado started now)")
 PY
