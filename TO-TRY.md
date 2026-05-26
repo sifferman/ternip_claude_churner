@@ -61,6 +61,81 @@ These are ideas Claude has surfaced from timing-report analysis or
 from reading CLAUDE.md "What to try next" / QUESTIONS.md. Roughly
 prioritized — top of list = highest expected impact / lowest risk.
 
+### A. Try `Performance_EarlyBlockPlacement` strategy
+
+**Where:** `synth/vivado_common/` (add a strategy override) or via
+`kernel.cfg`'s `[vivado]` section:
+```
+prop=run.impl_1.strategy=Performance_EarlyBlockPlacement
+```
+
+**What:** The Xilinx xbtest timing-closure tips doc explicitly says
+"frequently Performance_EarlyBlockPlacement" is the strategy that
+closes when default doesn't. We're using Vivado defaults today
+(no strategy override anywhere in synth/). Single specific strategy
+is a low-risk experiment.
+
+**Why:** Default Vivado synth/impl strategies are tuned for
+typical user code; this one was hand-picked for HBM/AXI-heavy
+Vitis kernels exactly like ours. Could shift the 246.9 MHz peak
+upward or stabilize the placement-variance we saw between
+2026-05-25 6:46 PM and 2026-05-26 5:49 AM (same config, 246.9 vs
+236.0 MHz).
+
+**Risk:** None — alternative strategy, same RTL, same config. If
+it doesn't help, revert the one line.
+
+### B. Enable phys_opt + route Explore directives + post-route phys_opt
+
+**Where:** `synth/vivado_common/` or `kernel.cfg [vivado]` section.
+
+**What:** Per the xbtest doc:
+```
+prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.IS_ENABLED=true
+prop=run.impl_1.STEPS.PHYS_OPT_DESIGN.ARGS.DIRECTIVE=Explore
+prop=run.impl_1.STEPS.ROUTE_DESIGN.ARGS.DIRECTIVE=Explore
+prop=run.impl_1.STEPS.POST_ROUTE_PHYS_OPT_DESIGN.IS_ENABLED=true
+prop=run.impl_1.STEPS.POST_ROUTE_PHYS_OPT_DESIGN.ARGS.DIRECTIVE=Explore
+```
+
+`Explore` runs more aggressive optimization passes than the default
+`Default` directive. Post-route phys_opt is OFF by default (per
+Xilinx docs); enabling it gives Vivado one more pass to fix
+residual issues after routing.
+
+**Why:** "Spend more compute hours per build" lever — every option
+above costs extra build time but explores more of the placement +
+routing search space. The doc recommends them for hard-to-close
+kernels.
+
+**Risk:** Build time grows (maybe 20-40% — ~30 min per iteration
+extra). Otherwise no functional risk.
+
+### C. Force BRAM LOC from a known-good build (reproduce the lucky placement)
+
+**Where:** New `synth/vivado_common/place_design_pre.tcl`-style
+file with hand-extracted `set_property LOC ... [get_cells ...]`
+constraints.
+
+**What:** The xbtest doc's "Force LOC of BRAM" workflow:
+1. Open a passing-timing DCP (the 246.9 MHz build's checkpoint)
+2. `find_1 [get_cells -hierarchical -filter {PRIMITIVE_TYPE =~ BLOCKRAM.*.*}]`
+3. Highlight + right-click → "fix cells"
+4. `write_xdc -exclude_timing kernel_bram.xdc`
+5. Add the LOCs to `place_design_pre.tcl` in the failing build
+
+This pins the BRAM locations from a lucky build. The placer
+respects them and reproduces (most of) the good layout.
+
+**Why:** Directly attacks the Vivado-non-determinism issue that
+made 2026-05-26 5:49 AM lose 11 MHz on what should have been an
+identical config to 2026-05-25 6:46 PM.
+
+**Risk:** LOC constraints are fragile — if any BRAM moves or is
+removed in a future RTL change, the constraint breaks. Need to
+re-extract after significant kernel changes. Medium effort to set
+up; high payoff if the 246.9 MHz lucky placement was BRAM-dominated.
+
 ### 0. csig_parallelized PISO → csig_out_q skid revisit (newly relevant)
 
 **Where:** `ternary_matmul/third_party/ternip/rtl/math/ternip_csig_parallelized.sv`
