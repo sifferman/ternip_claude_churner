@@ -13,6 +13,46 @@ worked" (or "net-negative") list and delete the entry here.
 
 ---
 
+## Baseline timing-hygiene attributes (already in the current RTL)
+
+Before this autonomous loop existed, a separate (now-deleted) working
+tree established the WNS floor for this design at roughly **-0.386 ns**
+using only attribute-driven hygiene — no structural refactoring,
+no lane splits, no skid modules. **All of those attributes are still
+present in our current RTL** (verified):
+
+| Attribute / construct | Location | Purpose |
+|---|---|---|
+| `rst_nq` shift-reg with synth replication | `ternip/rtl/axi/s_axi_ternip_rst.v` | Wide-fanout reset distribution |
+| Per-block local `rst_ni_q` re-reg | `ternip_tmatmul.sv`, `ternip_rms.sv`, etc. | UG949 §4.5 pattern #3 |
+| `(* MAX_FANOUT = "25" *)` on `tmatmul/state_q` | `ternip_tmatmul.sv:142` | FSM source replication |
+| `(* MAX_FANOUT = "25" *)` on `tmatmul_operation_q` | `ternip_tmatmul.sv:160` | FSM source replication |
+| `(* MAX_FANOUT = "25" *)` on `rms_op_q` + `rms/state_q` | `ternip_rms.sv:104, 115` | FSM source replication |
+| `(* MAX_FANOUT = "25" *)` on `read_valid_q{1,2}`, `write_valid_q{1,2}` | `ternip_pipelined_mem.sv:81-86` | Wide-CE source replication |
+| `MREG=1` (DSP M-stage register) in starmul | `ternip_starmul.sv:67` | Halves the multiplier internal path |
+
+**Where THIS loop is vs the legacy baseline:**
+
+| State | Best WNS | Best freq |
+|---|---:|---:|
+| Pre-loop legacy (attributes only) | -0.386 ns | (not measured at the time) |
+| 2026-05-24 5:01 AM (loop iter 1: + rms input slice) | -0.259 ns | 242.1 MHz |
+| 2026-05-26 3:13 AM (loop iter 6: stages=8 + slice) | **-0.166 ns** | 230.5 MHz |
+| 2026-05-25 6:46 PM (loop iter 3: trace_memory off) | (CSV lost) | **246.9 MHz** (peak) |
+
+The autonomous loop has improved WNS by ~0.22 ns over the legacy
+baseline (with the rms input slice + the FSM hygiene stack
+intact). The legacy state's `-0.386` is no longer the bar; treat
+it as confirmation that these attributes are load-bearing —
+**do not remove any of them** when proposing future changes.
+
+**Lesson for the loop:** the structural changes have helped, but
+the attribute baseline is doing meaningful work too. If a future
+iteration regresses, suspect recent structural changes first, not
+the attribute hygiene.
+
+---
+
 ## User-Generated
 
 ### 1. Drop `kernel_compiler_margin` from 20% to 5% (or lower)
