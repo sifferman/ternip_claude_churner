@@ -437,11 +437,31 @@ failed iteration that cost nothing to start.
    (yes, before responding to the user, before writing memory, before
    anything). The very first command in such a turn should kick a
    build.
-2. **Chain builds with no gap.** The first action on the monitor's
-   `BUILD SUCCESS` / `BUILD FAILED` event is `bash scripts/run_build.sh`
-   for the next iteration — *before* the timing-report write-up, the
-   tarball, the release-body edit, or anything else. eq2 should be
-   busy on the next iteration while you analyze the previous one.
+2. **Chain builds with near-zero gap.** When the monitor fires
+   `BUILD SUCCESS` / `BUILD FAILED`, the sequence is:
+   1. **First (~1-2 min)**: generate the timing CSV via local vivado
+      batch (`.claude/skills/vivado-read-reports/scripts/generate_timing_csv.tcl`)
+      against the just-finished `prj.xpr`. **This MUST happen before
+      the kick** — the next iteration's v++ wipes the xpr in ~30s and
+      the per-endpoint timing data becomes unrecoverable. Lost on
+      2026.05.25-18:46; don't repeat.
+   2. **Second (instant)**: snapshot `build.log` to
+      `artifacts/<datecode>/build.log` so the kick doesn't truncate it.
+   3. **Third (instant)**: `bash scripts/run_build.sh` to kick the
+      next iteration. eq2 is busy again.
+   4. **Fourth (parallel ~5 min)**: tar the build dir into the
+      `<datecode>/build.tar.gz` artifact. Runs alongside the new
+      build's sv2v phase; harmless to both.
+   5. **Fifth (parallel)**: edit the just-finished build's release
+      body with the results, upload assets. Start the new build's
+      monitor + draft its release body.
+
+   The 1-2 min CSV step costs <1% of the iteration's 3 hours and
+   guarantees we keep every iteration's timing data.
+
+   When chaining, also stop the previous build's monitor before
+   starting a new one — the old monitor doesn't know the log got
+   truncated and will silently re-attach to the new build.
 3. **Pre-stage the next iteration while the current build runs.**
    During the 3-hour Vivado window, pick the next change from
    `TO-TRY.md` (User-Generated first, then Claude-Generated), edit the
