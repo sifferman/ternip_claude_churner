@@ -242,41 +242,12 @@ This list reflects lessons from this session — don't redo things in the
 
 ### Things to try (open ideas, prioritized)
 
-1. **MOA → importvector backpressure path** — when the previous bottleneck
-   (rms_op_q → DSP.B) is fixed, the next dominant cluster is
-   `multioperand_accumulator/out_valid_q_reg → importvector buffer's wide
-   tdata register CE`. The MOA's `out_valid_q` is in one part of the SLR
-   layout, the importvector buffer is in another. Options: pipeline the
-   `accumulator_q2_ready` signal, or revisit the importvector buffer's
-   CE source structurally.
-2. **Per-bank importvector or full importvector → MOA skid stages**.
-   Cross-SLR data movement at 300 MHz needs explicit pipelining;
-   `ternip_pipelined_interconnect` exists for this purpose (already used
-   inside `pipelined_mem`'s `DECOUPLED_READY` path). Insert another
-   instance where MOA output / importvector input cross SLR boundaries.
-3. **Inspect `ternip_core`'s instruction-fetch / address-staging FSM**.
-   `latched_tmatmul_addrs_d` has a wide demux that puts an alumacc cone
-   at FO~410. Not a hot path during the matmul itself but counts toward
-   WNS during instruction dispatch.
-4. **AXI Lite control interconnect (`axi_interconnect_ctrl`)** — sometimes
-   becomes the WNS source after kernel-side bottlenecks clear. This is
-   Xilinx auto-generated and hard to fix structurally; mostly placement-
-   dependent. If it dominates, try fewer kernel-side changes per iteration
-   to give Vivado breathing room.
-5. **Disable `--trace_memory` entirely**. We currently emit per-SLR
-   trace_memory in `synth/pynqvivado_common/generate_kernel_cfg.tcl`
-   (lines 58-72) to silence the Vitis "did not specify more than one SLR
-   for tracing" warning. Trace memory adds AIM monitors + per-SLR trace
-   buffers that consume routing resources but only matter for runtime
-   profiling (`xrt-smi`). For pure timing closure they're dead weight.
-   Try removing the `[profile]` block from `kernel.cfg` generation
-   entirely (or setting `data=none:none:none` + dropping the `trace_memory`
-   lines) and see how much WNS moves. Easy to revert, easy to measure.
-6. **Once OneCore closes, tune MaxCores** — switch to
-   `xcu250_D=1024_MaxCores`, push `BatchSize` up (target 20+), and re-
-   tune `VectorParallelism`/`LutParallelism`/`CoreInterconnectNumStages`
-   for the larger floorplan. Don't go to MaxCores before OneCore is
-   close to closing; debugging at MaxCores is much harder.
+**See [TO-TRY.md](TO-TRY.md)** for the living list. It has two sections:
+"User-Generated" (priorities the user adds) and "Claude-Generated"
+(ideas Claude surfaces from timing-report analysis or from this section's
+history). When picking the next iteration's change, **drain
+User-Generated first, then top of Claude-Generated.** Move tried ideas
+from TO-TRY.md to the "have-been-done" lists above as you go.
 
 ## Style and code rules
 
@@ -442,6 +413,50 @@ Attach:
   not the RTL.
 - **Read the lowRISC style guide before any significant refactor**:
   [references/lowRISC-style-guide/VerilogCodingStyle.md](references/lowRISC-style-guide/VerilogCodingStyle.md).
+
+## Always keep eq2 building — NEVER GIVE UP
+
+**This is the most important rule. eq2 sitting idle is a bug.** The
+user runs this harness for days unattended; every idle hour is a
+failed iteration that cost nothing to start.
+
+1. **At the start of every turn, check whether a build is running on
+   eq2.** If not, find out why and fix it before doing anything else
+   (yes, before responding to the user, before writing memory, before
+   anything). The very first command in such a turn should kick a
+   build.
+2. **Chain builds with no gap.** The first action on the monitor's
+   `BUILD SUCCESS` / `BUILD FAILED` event is `bash scripts/run_build.sh`
+   for the next iteration — *before* the timing-report write-up, the
+   tarball, the release-body edit, or anything else. eq2 should be
+   busy on build_N+1 while you analyze build_N.
+3. **Pre-stage the next iteration while the current build runs.**
+   During the 3-hour Vivado window, pick the next change from
+   `TO-TRY.md` (User-Generated first, then Claude-Generated), edit the
+   RTL, run sims/lint, and commit/push so eq2 has the code. The kick
+   is then a 5-second action when the current build ends.
+4. **There is always something to try.** If TO-TRY.md is empty,
+   re-read the latest CSV for new clusters, scan `references/` for
+   relevant techniques, or revisit a previously net-negative idea
+   with a different angle. Even when WNS is closed at 300 MHz, there
+   is `BatchSize` to tune, `--trace_memory`-style cleanups, and
+   MaxCores work. **Never decide "there's nothing useful to do."**
+5. **Regressions are not a reason to stop.** A net-negative iteration
+   means you learned something — log it in CLAUDE.md's
+   "net-negative" list, revert if needed, AND IN THE SAME COMMIT BLOCK
+   bundle a fresh change so the next build moves forward. A
+   pure-revert build is a wasted 3 hours.
+6. **The smallest-blast-radius candidate from TO-TRY.md is always a
+   defensible choice.** When you're not sure what to try next, pick
+   the lowest-risk entry and ship. Add a QUESTIONS.md note explaining
+   what you picked and why; the user reads it asynchronously and
+   redirects mid-flight if they want something else.
+
+**Self-check at the end of every turn:** did this turn result in
+(a) eq2 building a new iteration, (b) RTL/config staged for the
+next iteration that will kick the moment current build finishes,
+or (c) a release update for a build that just completed? If
+none, something is wrong — reopen the loop and find what to ship.
 
 ## Don't pause to ask questions
 
