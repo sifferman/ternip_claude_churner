@@ -32,7 +32,7 @@ prioritized — top of list = highest expected impact / lowest risk.
 **Where:** `ternary_matmul/third_party/ternip/rtl/fus/ternip_tmatmul.sv`,
 the `tmatmul_operation_q` register and its FSM cone.
 
-**What:** 202605240827 surfaced a 7-LUT-level self-loop on
+**What:** 2026.05.24-0827 surfaced a 7-LUT-level self-loop on
 `tmatmul_operation_q[1]` → its MAX_FANOUT replicas (-0.308 ns slack
 when the importvector wide-CE cluster was displaced). The FSM
 combinational decode (`state_q == X && tmatmul_operation_q == Y`) is
@@ -64,9 +64,9 @@ into separately-named per-bank registers (`latched_addr_b0_q`,
 `latched_addr_b1_q`, ...) each with its own narrow CE, then re-pack
 on the read side.
 
-**Why:** Surfaced as cluster B in 202605240827 (`tmatmul_operation_q[1]`
-→ `latched_tmatmul_addrs_q.CE`). Was masked by 202605240501's wide-CE
-cluster. Even with 202605240827 reverted, this is the second-tier path.
+**Why:** Surfaced as cluster B in 2026.05.24-0827 (`tmatmul_operation_q[1]`
+→ `latched_tmatmul_addrs_q.CE`). Was masked by 2026.05.24-0501's wide-CE
+cluster. Even with 2026.05.24-0827 reverted, this is the second-tier path.
 
 **Risk:** Low — pure structural rename. Read-side semantics
 unchanged; write demux just becomes per-bank `if`s.
@@ -84,8 +84,8 @@ on `accumulator_q2_ready` or revisit the buffer's CE source
 structurally.
 
 **Why:** This is the originally-identified cluster in CLAUDE.md's
-"things to try" list. We never hit it in build_0..202605251846 because
-the `rms → convert` cluster dominated first, but with 202605240501's
+"things to try" list. We never hit it in build_0..2026.05.25-1846 because
+the `rms → convert` cluster dominated first, but with 2026.05.24-0501's
 rms input slice in place the next dominant SLR-crossing is the
 MOA → importvector edge.
 
@@ -132,7 +132,7 @@ placement-tuning rather than RTL.
 closure (WNS within ~0.1 ns of 0), the next productive direction is
 multi-core throughput.
 
-**Why:** OneCore at WNS=-0.259 (202605240501) isn't quite there yet, but
+**Why:** OneCore at WNS=-0.259 (2026.05.24-0501) isn't quite there yet, but
 not far. If multiple OneCore-direction iterations stop moving WNS,
 this is the alternate axis.
 
@@ -145,6 +145,6 @@ warns explicitly against this until OneCore is close.
 
 Re-read the latest build's CSV for new cluster patterns, scan
 CLAUDE.md "Things that have been done and worked" for ideas to
-extend (e.g., the 202605240501 input slice could have analogues on
+extend (e.g., the 2026.05.24-0501 input slice could have analogues on
 exportvector, rowwise_operation, etc.), and re-read `references/` for
 new techniques.

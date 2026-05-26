@@ -46,14 +46,19 @@ A bad run costs 3–4 hours plus the storage of its tarball. A great run
 costs the same. Spend the time pre-build to make sure you're getting a
 great run.
 
-## The loop (one iteration = one `YYYYMMDDHHMM` build)
+## The loop (one iteration = one `YYYY.MM.DD-HHMM` build)
 
-Each iteration's release / tag uses a 12-character timestamp tag of
-the form `YYYYMMDDHHMM` (24-hour, local PDT), set to the wall-clock
-when the Vivado build kicks (its first `[HH:MM:SS] Run vpl: Step
-create_project: Started` marker in `build.log`). Use `date '+%Y%m%d%H%M'`
-on a local shell after kick to compute it; the result sorts
-naturally and is unambiguous across days.
+Each iteration's release / tag is named after the wall-clock when the
+Vivado build kicks, in the form `YYYY.MM.DD-HHMM` (24-hour, local
+PDT, no colon — git tag names can't contain `:`). Take the time from
+`build.log`'s first `[HH:MM:SS] Run vpl: Step create_project:
+Started` marker. The release **title** can use the friendlier
+`YYYY.MM.DD-HH:MM` (with colon) form since titles aren't tag names.
+
+```bash
+date '+%Y.%m.%d-%H%M'       # tag form, e.g. 2026.05.25-1846
+date '+%Y.%m.%d-%H:%M'      # title prefix, e.g. 2026.05.25-18:46
+```
 
 ```
 ┌─ Pick an optimization (see "What to try next" below)
@@ -199,7 +204,7 @@ yosys infers a multiplier either way — just as LUTs+CARRY4 instead of DSP.
 vivado -mode batch -nojournal -nolog \
     -source .claude/skills/vivado-read-reports/scripts/generate_timing_csv.tcl \
     -tclargs ternary_matmul/synth/pynqvivado_au250/build/xcu250_D=1024_OneCore/hw/_x/link/vivado/vpl/prj/prj.xpr \
-    YYYYMMDDHHMM.csv \
+    YYYY.MM.DD-HHMM.csv \
     level0_i/level1/level1_i/ulp/ternip_ip_1
 ```
 
@@ -234,7 +239,7 @@ This list reflects lessons from this session — don't redo things in the
   semantics)
 - Asynchronous reset experiments (Xilinx UG949 §4.2 strongly recommends
   sync, especially for DSP48 / BRAM)
-- **Per-lane `stall1` in `ternip_pipelined_mem`** (202605240827). Goal was to
+- **Per-lane `stall1` in `ternip_pipelined_mem`** (2026.05.24-0827). Goal was to
   break the FO=4166 `axis_tready → wdata_q1.CE` cluster by giving each
   `data_lanes[i]` its own stall expression sourced from one lane's
   per-lane tready. The cluster did vanish — but the placer's re-layout
@@ -378,7 +383,7 @@ not `MAX_FANOUT` hints.
 
 ## How to write release notes (per iteration)
 
-Title: `YYYYMMDDHHMM: <one-line change summary>`
+Title: `YYYY.MM.DD-HHMM: <one-line change summary>`
 
 Body template:
 ```
@@ -404,7 +409,7 @@ next iteration>
 ```
 
 Attach:
-- `YYYYMMDDHHMM.csv` (the timing CSV)
+- `YYYY.MM.DD-HHMM.csv` (the timing CSV)
 - `build.tar.gz` (the tarred build dir — see `scripts/collect_artifacts.sh`)
 
 ## Operational hygiene

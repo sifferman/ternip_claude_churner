@@ -8,7 +8,7 @@ ternary_matmul/build/
 ternary_matmul/**/build/
 
 # Local per-iteration artifacts (committed as release assets, not tree files)
-# Matches YYYYMMDDHHMM-style date-code tags + legacy build_*.
+# Matches YYYY.MM.DD-HHMM-style date-code tags + legacy build_*.
 20*.csv
 20*.log
 20*.xlsx
