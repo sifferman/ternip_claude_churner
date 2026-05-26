@@ -15,9 +15,43 @@ worked" (or "net-negative") list and delete the entry here.
 
 ## User-Generated
 
-_(Empty — drop ideas here that Claude should prioritize over its own
-list. Easiest to-redirect mechanism: add a one-liner and Claude will
-pick from the top of this section first.)_
+### 1. Drop `kernel_compiler_margin` from 20% to 5% (or lower)
+
+**Where:** v++ link command in `ternary_matmul/synth/pynqvivado_au250/`
+(check Makefile for the v++ invocation; pass via `--xp
+prop:solution.kernel_compiler_margin=5`). OR set via the kernel.cfg
+profile if there's a directive for it.
+
+**What:** Vivado/Vitis adds a default 20% clock-uncertainty margin
+when AUTO-FREQ-SCALING-04 picks the kernel frequency. This explains
+the 30-65 MHz gap between WNS-implied zero-slack frequency and the
+reported achieved frequency across builds 1-6.
+
+| Build | WNS | zero-slack freq | × 0.80 (20%) | Vivado picked |
+|---|---:|---:|---:|---:|
+| 5:01 AM | -0.259 | 278 MHz | 222 MHz | 242.1 |
+| 12:34 AM | -0.243 | 279 MHz | 224 MHz | 213.8 |
+| 3:13 AM | -0.166 | 286 MHz | 229 MHz | 230.5 |
+
+Dropping to 5% would unlock ~+42 MHz on the current state at zero
+RTL risk. Worst case: a build might not be board-stable at the
+higher reported frequency (the 20% was there for jitter / process
+variation safety), discoverable at hardware validation time but
+not at synth time.
+
+**Why:** Forum-confirmed (Xilinx forums) that
+`--xp prop:solution.kernel_compiler_margin=<pct>` controls this.
+Default 20 is overly conservative for our design's clock paths.
+
+**Risk:** Low — config-only, no RTL movement, easy to revert. The
+new frequency may not run reliably on the AU250 board if the
+design has any high-jitter clock paths, but that's a runtime
+characteristic detected by board validation, not a synth issue.
+Related knob: `--kernel_frequency=N` to set a hard target, and
+`--xp param:compiler.enableAutoFrequencyScaling=0` to disable
+scaling entirely.
+
+---
 
 ---
 
