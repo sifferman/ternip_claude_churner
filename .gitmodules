@@ -26,3 +26,9 @@
 [submodule "references/yosys"]
 	path = references/yosys
 	url = git@github.com:YosysHQ/yosys.git
+[submodule "references/ThunderGP"]
+	path = references/ThunderGP
+	url = git@github.com:Xtra-Computing/ThunderGP.git
+[submodule "references/halalboro-fpga-accelerators"]
+	path = references/halalboro-fpga-accelerators
+	url = git@github.com:halalboro/fpga-accelerators.git

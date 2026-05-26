@@ -42,6 +42,11 @@ not at synth time.
 **Why:** Forum-confirmed (Xilinx forums) that
 `--xp prop:solution.kernel_compiler_margin=<pct>` controls this.
 Default 20 is overly conservative for our design's clock paths.
+Real-world data point: **ThunderGP** uses `kernel_compiler_margin=10%`
+on every graph kernel (see
+`references/ThunderGP/application/common.mk` lines 90, 94) — so
+production-ready Xilinx Vitis builds DO tune this knob, and 10%
+is the empirical "still safe" floor for accelerator kernels.
 
 **Risk:** Low — config-only, no RTL movement, easy to revert. The
 new frequency may not run reliably on the AU250 board if the
@@ -110,6 +115,109 @@ kernels.
 
 **Risk:** Build time grows (maybe 20-40% — ~30 min per iteration
 extra). Otherwise no functional risk.
+
+### D. Alternative strategy: `Performance_ExploreWithRemap`
+
+**Where:** `[vivado]` section in `kernel.cfg`. Per
+`references/halalboro-fpga-accelerators/Vitis-AI/examples/waa/apps/
+resnet50/build_flow/DPUCVDX8G_vck190/vitis_prj/scripts/system.cfg`
+line 27:
+```
+prop=run.impl_1.strategy=Performance_ExploreWithRemap
+```
+
+**What:** Strategy alternative to `Performance_EarlyBlockPlacement`
+(candidate A). More aggressive remap-based netlist transformations,
+balances exploration depth vs. runtime. Used by Vitis-AI's
+production resnet50 build on VCK190.
+
+**Why:** Two-strategy A/B test — try A first, then this if A doesn't
+help. Different strategies pick different starting points, so they
+sample different placement minima.
+
+**Risk:** None (same as candidate A — alternative strategy, same
+RTL/config).
+
+### E. FireSim "CONGESTION" strategy: synth retiming + tight fanout cap + muxf_remap
+
+**Where:** `references/firesim/platforms/xilinx_alveo_u250/cl_firesim/
+scripts/strategies/strategy_CONGESTION.tcl`. FireSim runs on the
+SAME PART we target (xcu250-figd2104). Their CONGESTION strategy
+script combines:
+```
+synth_options    = "-retiming"
+opt_options      = "-hier_fanout_limit 512 -muxf_remap -propconst -retarget -sweep"
+phys_directive   = "AggressiveExplore"
+route_directive  = "Explore"
+```
+
+**What:** Synthesis-time retiming lets Vivado move registers across
+combinational logic to balance pipeline stages — could rebalance
+the long combinational chains we keep seeing (tmatmul_operation_q,
+csig, tmatmul_dma). `-hier_fanout_limit 512` caps replication
+proactively (vs our reactive `force_replication_on_nets` rules).
+`-muxf_remap` rewrites wide muxes into narrower trees — directly
+targets the FSM decode cones in our build.
+
+**Why:** Synthesis-time fixes hit the netlist before placement gets
+a chance to commit to a bad layout. Vivado users on the same part
+(xcu250) ship with these options as their CONGESTION strategy.
+
+**Risk:** Synthesis runtime grows ~10-20% with `-retiming`. Other
+options are post-synth and only affect impl time. Otherwise
+no functional risk.
+
+### F. FireSim "TIMING" strategy: ExtraNetDelay_high + tns_cleanup + post-route SLL fix
+
+**Where:** `references/firesim/platforms/vitis/cl_firesim/
+build-strategies/strategy_TIMING.cfg`. Combines:
+```
+place_design       -directive ExtraNetDelay_high
+route_design       -tns_cleanup
+post_route_phys_opt_design -sll_reg_hold_fix
+```
+
+**What:** `ExtraNetDelay_high` tells the placer to assume worst-case
+net delay early (the placer makes more pessimistic decisions to
+ensure routes have slack). `-tns_cleanup` is a route_design option
+that removes unused routing after route to free capacity for
+critical paths. `-sll_reg_hold_fix` fixes hold violations on
+SLR-crossing register paths (LAGUNA cells) — directly addresses
+the cross-SLR issues this design has.
+
+**Why:** Three orthogonal levers on three different impl stages.
+The SLL-reg-hold-fix is U250-specific (LAGUNA) and could be the
+single biggest unblocker for our cross-SLR paths.
+
+**Risk:** Build time grows. ExtraNetDelay_high can sometimes make
+WNS slightly worse if the placer was already finding a good
+layout — A/B carefully.
+
+### G. Disable AUTO-FREQ-SCALING entirely (production-style, not for closure debug)
+
+**Where:** Per `references/halalboro-fpga-accelerators/Vitis-AI/
+examples/waa/apps/resnet50/pre_built_flow/scripts/waa_trd.mk`
+lines 36-37:
+```
+--xp param:compiler.enableAutoFrequencyScaling=false
+--xp param:compiler.skipTimingCheckAndFrequencyScaling=true
+```
+
+**What:** Production Vitis-AI builds DISABLE the auto-scaling
+entirely. Combined with a fixed `--kernel_frequency` target and a
+lowered `kernel_compiler_margin`, this gives explicit control over
+the kernel clock. The `skipTimingCheckAndFrequencyScaling=true`
+flag is the harder version: even skips the post-route timing check
+that triggers scaling.
+
+**Why:** Removes the silent ~20% margin tax. If the design closes
+at the target, you get the target frequency; if it doesn't, you
+get a clear failure (no surprise downshift). This is the natural
+pair to candidate User-Generated #1.
+
+**Risk:** If the design genuinely doesn't close, the bitstream
+won't work on hardware — but we'd discover that at build time
+(Vivado reports negative WNS) rather than at runtime.
 
 ### C. Force BRAM LOC from a known-good build (reproduce the lucky placement)
 
