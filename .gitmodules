@@ -32,3 +32,6 @@
 [submodule "references/halalboro-fpga-accelerators"]
 	path = references/halalboro-fpga-accelerators
 	url = git@github.com:halalboro/fpga-accelerators.git
+[submodule "references/simplitis"]
+	path = references/simplitis
+	url = git@github.com:drichmond/simplitis.git
