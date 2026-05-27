@@ -19,6 +19,26 @@ build.log
 build.tar.gz
 artifacts/
 
+# Vivado / Vitis stray artifacts (any run that leaves these in the
+# repo tree should leave NO trace -- we collect named CSVs into
+# artifacts/ and tar the build dir into release assets instead)
+vivado.jou
+vivado.log
+vivado_*.backup.jou
+vivado_*.backup.log
+.Xil/
+.cache/
+*.jou
+*.dot
+synth.json
+timing_report.txt
+timing_report.rpv
+tight_timing_paths.txt
+fanout_report.txt
+*.rpv
+*.rpx
+*.rdf
+
 # Editor / OS noise
 *.swp
 *~
