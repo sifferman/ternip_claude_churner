@@ -248,31 +248,75 @@ single biggest unblocker for our cross-SLR paths.
 WNS slightly worse if the placer was already finding a good
 layout — A/B carefully.
 
-### G. Disable AUTO-FREQ-SCALING entirely (production-style, not for closure debug)
+### G. Disable AUTO-FREQ-SCALING entirely (production-style, not for closure debug) — **IN FLIGHT (build_19)**
 
-**Where:** Per `references/halalboro-fpga-accelerators/Vitis-AI/
-examples/waa/apps/resnet50/pre_built_flow/scripts/waa_trd.mk`
-lines 36-37:
+**Status:** Pre-staged for build_19 (2026.05.27, kicks when build_18
+ends). Will move to CLAUDE.md done/net-negative when result lands.
+
+**Where:** In `synth/pynqvivado_common/generate_kernel_cfg.tcl`,
+add this section to the generated kernel.cfg:
+
 ```
---xp param:compiler.enableAutoFrequencyScaling=false
---xp param:compiler.skipTimingCheckAndFrequencyScaling=true
+[advanced]
+param=compiler.skipTimingCheckAndFrequencyScaling=1
 ```
 
-**What:** Production Vitis-AI builds DISABLE the auto-scaling
-entirely. Combined with a fixed `--kernel_frequency` target and a
-lowered `kernel_compiler_margin`, this gives explicit control over
-the kernel clock. The `skipTimingCheckAndFrequencyScaling=true`
-flag is the harder version: even skips the post-route timing check
-that triggers scaling.
+Two reference points:
 
-**Why:** Removes the silent ~20% margin tax. If the design closes
-at the target, you get the target frequency; if it doesn't, you
-get a clear failure (no surprise downshift). This is the natural
-pair to candidate User-Generated #1.
+1. **Official source — UG1702 (Vitis Reference Guide), 2023.1.**
+   `references/vivado-docs-2023.1/Vitis Reference Guide (UG1702).htm`
+   line 10249:
 
-**Risk:** If the design genuinely doesn't close, the bitstream
-won't work on hardware — but we'd discover that at build time
-(Vivado reports negative WNS) rather than at runtime.
+   > `compiler.skipTimingCheckAndFrequencyScaling`
+   > Type: Boolean. Default Value: FALSE.
+   > This parameter causes the Vivado tool to skip the timing check
+   > and optional clock frequency scaling that occurs after the last
+   > step of implementation process, which is either `route_design`
+   > or post-route `phys_opt_design`.
+   > Applies to: `v++ --link`, `vpl.impl`.
+
+   Our build runs `v++ --link` and goes through `vpl.impl`, so the
+   parameter applies. Setting it to `1` (=TRUE) skips the final
+   timing check + the AUTO-FREQ-SCALING-04 decision.
+
+2. **Working example — `references/simplitis/02-axil-bram/
+   xilinx_u250_gen3x16_xdma_4_1_202210_1/kernel.cfg`.** Uses the
+   `[advanced] param=…=1` config-file form (not `--xp`).
+
+**Important — config-file form, not `--xp`:** The `--xp param:…`
+CLI form was DEAD in Vitis 2023.1 (silently ignored — verified
+in 2026-05-26 11:15 AM build_9 with `kernel_compiler_margin`
+and build_10 with `run.impl_1.strategy`). The `kernel.cfg
+[advanced] param=…` form is the one Vitis 2023.1 actually
+parses. Ignore the `halalboro-fpga-accelerators` `.mk` snippet's
+`--xp` syntax — it's from an older Vitis version.
+
+**What:** Skips Vivado's final timing-summary check and the
+AUTO-FREQ-SCALING-04 downshift. The xclbin gets packaged at the
+requested clock (300 MHz from the U250 xdma platform) regardless
+of WNS. Per-step `report_timing_summary` data is unaffected, so
+our CSV via `generate_timing_csv.tcl` against `prj.xpr` still
+reports true WNS/TNS.
+
+**Why:** Removes the silent ~20-30% margin tax that
+AUTO-FREQ-SCALING-04 applies (e.g. build_16 with WNS=-0.190
+implies a zero-slack frequency of ~282 MHz, but the bitstream
+shipped at 218.5 MHz — a 29% downshift). With this param=1, the
+bitstream ships at exactly the requested 300 MHz and our CSV
+tells the true WNS story.
+
+**Companion knob:** `compiler.enableAutoFrequencyScaling=0`
+(also a `[advanced] param=`). Skipping the timing check
+implicitly disables scaling; setting both explicitly is
+belt-and-suspenders.
+
+**Risk:** If the design genuinely doesn't close, the bitstream is
+shipped at 300 MHz and may glitch on the failing paths at
+runtime. We discover this at build time (`report_timing_summary`
+in the CSV still reports negative WNS) rather than runtime,
+though — Vivado's per-step reports are independent of this
+flag. The board may not run at 300 MHz reliably; that's a
+deferred problem (worry about it when we have a passing build).
 
 ### C. Force BRAM LOC from a known-good build (reproduce the lucky placement)
 
