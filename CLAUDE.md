@@ -151,10 +151,37 @@ The user said it directly:
 > one parameter causes BatchSize to decrease, which causes
 > tokens/second to decrease, then ignore that change.
 
-## Utilization tracking (mandatory for every MaxCores build)
+## Mandatory release-notes line items
 
-Every MaxCores build's release notes MUST include a
-utilization breakdown via the `vivado-utilization` skill:
+Every release body MUST include the following:
+
+### 1. Timing (always)
+- WNS, TNS, failing-endpoint count (from per-iteration CSV).
+- Achieved frequency (or "300 MHz, no AUTO-FREQ-SCALING-04" with the
+  skipTimingCheckAndFrequencyScaling flag).
+- AUTO-FREQ-SCALING-04 status (fired / skipped).
+
+### 2. Estimated tokens/sec — `report_instruction_timing.py` (always)
+Run BEFORE and AFTER every config change that affects timing-relevant
+parameters (BatchSize, VectorParallelism, LutParallelism,
+NumVectorRegisters, CoreInterconnectNumStages):
+
+```bash
+cd ternary_matmul/sw_utils/target
+PYTHONPATH=.. python3 report_instruction_timing.py \
+    ../../config/xcu250_D=1024_MaxCores.svh MMfreeLM-370M | tail -10
+```
+
+The two relevant lines:
+- `singlecore tokens_per_second at <clk_freq>MHz = <N>`
+- `multicore tokens_per_second at <clk_freq>MHz = <BatchSize × N>`
+
+Include both the projected value and the previous build's value
+so the trend is visible in the release body. Multicore is the
+deliverable — it's the one we're optimizing.
+
+### 3. Utilization (MaxCores only)
+Run the `vivado-utilization` skill:
 
 ```bash
 python3 .claude/skills/vivado-utilization/scripts/parse_kernel_util.py \
