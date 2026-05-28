@@ -624,23 +624,45 @@ failed iteration that cost nothing to start.
    build.
 2. **Chain builds with near-zero gap.** When the monitor fires
    `BUILD SUCCESS` / `BUILD FAILED`, the sequence is:
-   1. **First (~1-2 min)**: generate the timing CSV via local vivado
-      batch (`.claude/skills/vivado-read-reports/scripts/generate_timing_csv.tcl`)
-      against the just-finished `prj.xpr`. **This MUST happen before
-      the kick** — the next iteration's v++ wipes the xpr in ~30s and
-      the per-endpoint timing data becomes unrecoverable. Lost on
-      2026.05.25-18:46; don't repeat.
-   2. **Second (instant)**: snapshot `build.log` to
-      `artifacts/<datecode>/build.log` so the kick doesn't truncate it.
-   3. **Third (instant)**: `bash scripts/run_build.sh` to kick the
-      next iteration. eq2 is busy again.
-   4. **Fourth (1 min, before tar)**: if this was a MaxCores build,
-      run the vivado-utilization skill against the build dir and
-      capture the output. The xpr is being wiped but
-      `kernel_util_routed.rpt` lives in `impl_1/` which is preserved
-      until v++'s new build phase touches it (a few minutes after
-      kick). Snapshot it explicitly to
-      `artifacts/<datecode>/kernel_util.txt` for the release body.
+
+   **HARD RULE — no race conditions.** Every artifact the release
+   body needs MUST be staged to `artifacts/<datecode>/` BEFORE the
+   next build is kicked. v++ wipes parts of `build/` (xpr, impl_1
+   reports, etc.) starting seconds after kick, and any analysis that
+   reads from `build/` after kick is racing with that wipe. Stage
+   first, kick second. The tar of the full build dir is the only
+   thing that's allowed to run in parallel with the next build,
+   because the tar acts on the build/ contents that exist at tar
+   START time (not what's still there at tar finish).
+
+   1. **Step 1 (~1-2 min, sequential)**: generate the timing CSV
+      via local vivado batch
+      (`.claude/skills/vivado-read-reports/scripts/generate_timing_csv.tcl`)
+      against the just-finished `prj.xpr`. **Reads prj.xpr** — must
+      run before kick. CSV is the per-endpoint timing data, which is
+      unrecoverable once xpr is wiped (lost on 2026.05.25-18:46; don't
+      repeat).
+   2. **Step 2 (instant, sequential)**: copy `build.log` to
+      `artifacts/<datecode>/build.log`. The kick's v++ truncates it
+      otherwise.
+   3. **Step 3 (instant, sequential)**: **For MaxCores builds**: copy
+      `build/.../impl_1/kernel_util_routed.rpt` to
+      `artifacts/<datecode>/kernel_util_routed.rpt`. The
+      vivado-utilization skill reads this file. v++'s next build
+      phase wipes/regenerates impl_1 contents.
+   4. **Step 4 (instant, sequential)**: copy any other small
+      MUST-HAVE files (any other reports the release body cites) to
+      `artifacts/<datecode>/`. **At this point everything for the
+      release body is safe on disk in `artifacts/<datecode>/`.**
+   5. **Step 5 (instant)**: `bash scripts/run_build.sh` to kick the
+      next iteration. eq2 is busy again. Steps 6+ now run in
+      parallel with the new build.
+   6. **Step 6 (parallel ~5 min, background)**: tar the build dir
+      into `artifacts/<datecode>/build.tar.gz`. This is the only
+      step allowed to run in parallel with the next build, because
+      tar's file-list is captured at start; some files inside the
+      tarball may be partial if v++ writes to them, but the small
+      critical files are already safely staged in steps 1-4.
       `<datecode>/build.tar.gz` artifact. Runs alongside the new
       build's sv2v phase; harmless to both.
    5. **Fifth (parallel)**: edit the just-finished build's release
