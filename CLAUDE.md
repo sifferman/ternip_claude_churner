@@ -654,15 +654,20 @@ failed iteration that cost nothing to start.
       MUST-HAVE files (any other reports the release body cites) to
       `artifacts/<datecode>/`. **At this point everything for the
       release body is safe on disk in `artifacts/<datecode>/`.**
-   5. **Step 5 (instant)**: `bash scripts/run_build.sh` to kick the
-      next iteration. eq2 is busy again. Steps 6+ now run in
-      parallel with the new build.
-   6. **Step 6 (parallel ~5 min, background)**: tar the build dir
-      into `artifacts/<datecode>/build.tar.gz`. This is the only
-      step allowed to run in parallel with the next build, because
-      tar's file-list is captured at start; some files inside the
-      tarball may be partial if v++ writes to them, but the small
-      critical files are already safely staged in steps 1-4.
+   5. **Step 5 (~5 min, sequential, BEFORE kick)**: tar the build
+      dir into `artifacts/<datecode>/build.tar.gz`. Originally this
+      step was allowed parallel-with-kick, but evidence (build_22
+      tar caught v++'s new build phase mid-write, producing a
+      1.7 GB bloated tar instead of expected ~400 MB) proved tar
+      IS racy too: v++'s next phase begins writing to build/ within
+      seconds, and tar's per-file open()/read() interleaves with
+      those writes. So tar is now sequential.
+      ALTERNATIVELY: skip the tar entirely if disk pressure / time
+      pressure is high. The small critical files (steps 1-4) are
+      the deliverables; the tar is a best-effort backup.
+   6. **Step 6 (instant)**: `bash scripts/run_build.sh` to kick the
+      next iteration. eq2 is busy again. **No more reads from
+      build/ after this point.**
       `<datecode>/build.tar.gz` artifact. Runs alongside the new
       build's sv2v phase; harmless to both.
    5. **Fifth (parallel)**: edit the just-finished build's release
