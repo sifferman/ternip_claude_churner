@@ -113,6 +113,47 @@ list is:
 
 Don't touch other parameters. Don't introduce new configs.
 
+## Rapid iteration via `make vivado` (HARD RULE)
+
+`make pynqvivado_au250_hw` is **4-6 hours per build** at MaxCores
+scale (3 of those at OneCore). It is for validating a candidate
+config we BELIEVE will close timing. **Do NOT use it for discovery
+or "let's see what happens" iterations.**
+
+For discovery / RTL prototyping / directive search: use
+`make vivado CONFIG=xcu250_D=1024_MaxCores`. This runs kernel-only
+out-of-context PnR via `synth/vivado_generic/`:
+
+- No XRT shell — kernel synthesized as `design_1_wrapper`
+- Same RTL, same xcu250 part, same 300 MHz clock period
+- Mirror of pynqvivado_au250's full impl strategy (opt CONGESTION
+  REPLACE, place AltSpreadLogic_high, phys_opt AggressiveExplore,
+  route Explore -tns_cleanup, post_route -sll_reg_hold_fix)
+- AU250 floorplan (`floorplan/au250/floorplan.tcl`) pins
+  `tmatmul_dma[b]` to SLR `<b>` to mimic DDR-bank-to-SLR mapping
+- **~1-2 hour iteration** (vs 4-6h for pynqvivado_au250)
+
+Caveats (`make vivado` lacks):
+- DDR controllers + their SLR-pinned routing pressure
+- XRT shell ~10% chip overhead + platform pblocks
+- AXI Lite control plane through PCIe → debug bridge
+
+So `make vivado` UNDER-reports routing congestion for DMA paths and
+OVER-reports area headroom. Use it to test **intra-kernel** changes:
+- RTL simplification (multioperand_accumulator stage reduction,
+  MAX_FANOUT attr removal, DECOUPLED_READY changes)
+- Directive variants
+- Floorplan tweaks
+
+Use `make pynqvivado_au250_hw` ONLY to:
+- Validate a candidate config that `make vivado` says is good
+- Build the deliverable xclbin for board validation
+
+**3 consecutive 4-6h failures (builds 23/24/25) without using
+`make vivado` between them** is the cautionary tale that prompted
+this rule. The user explicitly: *"a 5 hour run is insane and should
+be a last resort once we know it will be extremely informative."*
+
 ## The actual optimization target: tokens/second
 
 **The optimization target is `tokens/second`, NOT WNS, NOT
