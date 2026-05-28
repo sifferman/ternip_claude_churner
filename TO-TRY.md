@@ -49,6 +49,101 @@ changes mask which ones helped and which hurt.
 
 ## User-Generated
 
+### 2. FF / area reduction for MaxCores BatchSize ramp (investigation)
+
+User-directive: "We may find that we actually want to reduce the
+number of flip-flops in the RTL, or simplify other things. Congestion
+may be the biggest issue as we increase BatchSize. Maybe do an
+investigation on what things could be removed from the RTL that don't
+affect correctness, and don't decrease token throughput too much."
+
+Throughput modeled via `ternary_matmul/sw_utils/target/
+report_instruction_timing.py <config.svh> <model>` (MMfreeLM-370M).
+On MaxCores BatchSize=16:
+  VP=4 (default):  2028 tokens/sec
+  VP=1 (current):   864 tokens/sec  ← per user-directive build_23
+
+**FF-reduction candidates, sorted by expected FF saved / throughput
+cost (high → low ROI):**
+
+#### A. `NumVectorRegisters=2 or 3` (vs current 4)
+- **FF saved per core**: `NumVectorRegisters × D × FixedPointPrecision`
+  = `4 × 1024 × 16 = 65,536` FFs per core × 16 cores = 1M FFs total.
+  Dropping to 2 saves 32k/core × 16 = 512k FFs (~40% of vector_registers
+  storage).
+- **Throughput cost**: Depends on register pressure in scheduled
+  program. If the compiler can fit MMfreeLM-370M in 2 registers
+  (likely possible for the simple matmul/RMS dataflow), 0% cost.
+  If not, more swaps → more cycles. Check via `swap_instructions_counter`
+  in `report_instruction_timing.py` output (currently 394 swaps at NVR=4;
+  rerun at NVR=2 to see counts).
+- **Risk**: Compiler may not gracefully degrade; need to verify
+  register-allocator works at NVR=2.
+
+#### B. `CoreInterconnectNumStages=4` (vs current 6)
+- **FF saved per core**: 2 stages × interconnect width. CoreInterconnect
+  width is ~D + control bits ≈ 1100 bits. 2 stages × 1100b × 16 cores
+  ≈ 35k FFs. Smaller win.
+- **Throughput cost**: Reduces latency between core ↔ DMA by 2 cycles.
+  Lower latency = less stall waiting. Could be net POSITIVE for
+  throughput (no swap impact).
+- **Risk**: If 6 stages were chosen because of cross-SLR routing,
+  dropping to 4 could violate setup time on the inter-stage hop.
+  Cross-SLR LAGUNA delay is 1.5-3 ns; need to confirm placement.
+
+#### C. Remove `(* MAX_FANOUT = "25" *)` source-side attributes
+- **FF saved**: NEGATIVE — these CAUSE replication. Removing them
+  REMOVES replicas. Could save ~5-10% FF on rms_op_q,
+  pipelined_mem's read_valid/write_valid q's, tmatmul/state_q.
+- **Throughput cost**: 0% (not a timing change, just a routing
+  attribute).
+- **Risk**: TCL replication in `pre_phys_opt_design.tcl` already
+  targets these nets; the source-side attribute may be redundant.
+  But this depends on TCL targeting being good enough.
+
+#### D. `DECOUPLED_READY=0` on importvector's pmem (vs current 1)
+- **FF saved**: One full ternip_pipelined_interconnect buffer
+  (DATA_WIDTH × NumLanes ≈ 1024 × 8 = 8k FFs per importvector × 4
+  importvectors per core × 16 cores = 512k FFs).
+- **Throughput cost**: Removes the read-side handshake decoupling.
+  If reads stall back-pressure into the request path. Hard to
+  quantify without sim. Could regress.
+- **Risk**: CLAUDE.md lists DECOUPLED_READY=1 on importvector pmem
+  as a "Things that have been done and worked" win. Removing it
+  is reverting that win.
+
+#### E. `NumLanes=4` on importvector pmem (vs current 8)
+- **FF saved**: Halves the lane count → halves lane FF overhead.
+  Per-lane CE wire fanout doubles. Could regress timing.
+- **Throughput cost**: 0% (structural, not timing).
+- **Risk**: Lane count was tuned for the wide-CE problem. Going
+  back risks reintroducing the FO=4163 cluster from build_9.
+
+#### F. Reduce `BatchSize-dependent` per-batch buffers
+- **FF saved**: Many modules use a buffer depth = BatchSize. At
+  BatchSize=16 that's 16x the FF cost. Reducing to depth=4 saves
+  3x.
+- **Throughput cost**: If buffers were sized for worst-case
+  back-pressure, reducing them could cause stalls. Need
+  throughput model to verify.
+- **Where to look**: gbfifo_loadstore_w, gbfifo_tmatmul, FIFO depths
+  in dv/ instances.
+
+#### G. Single-stage `multioperand_accumulator` (vs default)
+- **FF saved**: Each tree stage has D × FixedPointPrecision FFs.
+  Removing 1-2 stages could save ~32k FFs/core × 16 = 512k FFs.
+- **Throughput cost**: Each stage removed = 1 cycle less latency
+  on tmatmul_go. Could be net positive if tmatmul_go isn't
+  bandwidth-bound (currently it IS bandwidth-bound per
+  `report_instruction_timing.py`, so latency reduction has limited
+  benefit).
+- **Risk**: Combinational depth in the adder tree could violate
+  setup at 300 MHz. Need to balance stages vs depth.
+
+**Investigation method:** when picking the next iteration's candidate,
+run `report_instruction_timing.py` on the modified config to verify
+the throughput cost is acceptable BEFORE committing to the build.
+
 ### 1. Drop `kernel_compiler_margin` from 20% to 5% (or lower)
 
 **Where:** v++ link command in `ternary_matmul/synth/pynqvivado_au250/`
