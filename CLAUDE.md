@@ -228,6 +228,27 @@ This list reflects lessons from this session — don't redo things in the
   `ternip_csig_parallelized`
 - `importvector` pmem `NumLanes=8` (moderate lane split: 8 instances of
   `ternip_pipelined_mem_data_lane`, FO~512 per CE wire)
+- **`opt_design CONGESTION REPLACE`** (2026.05.26-22:14): drop
+  `-directive Explore` and add MORE_OPTIONS
+  `-hier_fanout_limit 512 -muxf_remap -propconst -retarget -sweep`
+  at `opt_design`. WNS -0.848 → -0.284 (one-shot win, 564 paths
+  cleaned).
+- **`place_design AltSpreadLogic_high`** (2026.05.27-03:15):
+  the breakthrough. WNS -0.284 → -0.190, TNS -50.121 → -0.607,
+  failing 558 → 8. The spread-logic-aggressive directive cracked
+  the marginal-path congestion pattern that build_14's
+  CONGESTION REPLACE left behind.
+- **`post_route_phys_opt -sll_reg_hold_fix` REPLACE pattern**
+  (2026.05.26-22:14): drop the directive and put `-sll_reg_hold_fix`
+  alone. Per UG904 4-167, directive XOR MORE_OPTIONS — REPLACE
+  the directive, never ADD alongside.
+- **`[advanced] param=compiler.skipTimingCheckAndFrequencyScaling=1`**
+  in `kernel.cfg` (2026.05.27-10:27, UG1702 line 10249).
+  Disables AUTO-FREQ-SCALING-04. xclbin packaged at the requested
+  300 MHz regardless of WNS; per-step `report_timing_summary`
+  data is unaffected, so our CSV still reports the design's
+  true WNS. The `--xp param:…` CLI form was DEAD in Vitis 2023.1
+  (silently ignored).
 
 ### Things that have been done but were net-negative (don't redo)
 - `NumLanes=64` on importvector (placement chaos — too many small instances)
@@ -263,6 +284,29 @@ This list reflects lessons from this session — don't redo things in the
   `pre_phys_opt_design.tcl` (already targets `*stall1*`, `*read_valid_q*`,
   `*pipelined_mem*`) is doing what this change attempted, and it's
   better behaved for the placer.
+- **`phys_opt_design -directive AddRetime`** (2026.05.27-05:42).
+  Goal: retiming after placement (with real delay info) to
+  re-balance the 13-14 LUT cones in tmatmul_dma's FSM transitions.
+  WNS -0.190 → -0.377, TNS -0.607 → -4.047, failing 8 → 99.
+  **AddRetime replaced AggressiveExplore's entire pass**, losing
+  the unrelated opts that the design depended on.
+- **`phys_opt_design -directive AlternateReplication`**
+  (2026.05.27-12:49). Goal: replicate source FFs at lower fanouts
+  (the 8 failing paths have FO 17-21, below AggressiveExplore's
+  default threshold). **IDENTICAL numbers to AddRetime** —
+  WNS -0.377, TNS -4.047, failing 99 — confirming that BOTH
+  directives bypass an AggressiveExplore-specific opt that this
+  design depends on. **AggressiveExplore is the only valid
+  phys_opt_design directive for this design.** Don't try other
+  variants without first establishing what AggressiveExplore is
+  uniquely doing.
+- **`route_design -directive AggressiveExplore`** (2026.05.27-15:10).
+  Hypothesis: extra global iterations + tighter convergence
+  could crack the 8 depth-bound paths (net delay > logic delay
+  on cluster B). **NEUTRAL** on WNS/TNS/failing — bit-identical
+  to Explore (-0.190 / -0.607 / 8) — but added +27 min build
+  time. Routing wasn't the bottleneck; depth is. Don't reapply
+  unless we have specific evidence of sub-optimal routing.
 
 ### Things to try (open ideas, prioritized)
 
