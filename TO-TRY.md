@@ -63,24 +63,32 @@ On MaxCores BatchSize=16:
   VP=4 (default):  2028 tokens/sec
   VP=1 (current):   864 tokens/sec  ← per user-directive build_23
 
+**Correction (2026.05.27):** First-pass analysis incorrectly claimed
+`NumVectorRegisters` storage is in FFs. It is **BRAM** — see
+`third_party/ternip/rtl/common/ternip_pipelined_mem_data_lane.sv:45`:
+`logic [LaneBits-1:0] MEM [NumEntries];` with synchronous write at
+line 62 and synchronous read at line 49. Vivado infers RAMB36/RAMB18.
+NumVectorRegisters reductions therefore save BRAM, not FFs.
+
+The true FF sinks at MaxCores BatchSize=16 are:
+1. **`multioperand_accumulator`** tree-stage pipeline regs:
+   each stage = D × FixedPointPrecision = 1024×16 = 16k FFs.
+   With ~log2(TmatmulParallelism) = 8 tree stages × 16 cores = ~2M
+   FFs.
+2. **`tmatmul` accumulator + per-stage pipelining** in the 256-lane
+   MAC array.
+3. **`CoreInterconnectNumStages=6`** pipeline registers (×16 cores).
+4. **Per-FU input/output pipeline registers** in rms / rowwise /
+   sig / csig (the convert ready/valid pipeline regs added in
+   the recent refactor each add D×16 = 16k FFs per pipe stage).
+5. **`importvector` / `exportvector`** DECOUPLED_READY buffer
+   stages = `ternip_pipelined_interconnect` with NumStages=1, each
+   stage holds DATA_WIDTH × NumLanes = 1024×8 = 8k FFs/buffer.
+
 **FF-reduction candidates, sorted by expected FF saved / throughput
 cost (high → low ROI):**
 
-#### A. `NumVectorRegisters=2 or 3` (vs current 4)
-- **FF saved per core**: `NumVectorRegisters × D × FixedPointPrecision`
-  = `4 × 1024 × 16 = 65,536` FFs per core × 16 cores = 1M FFs total.
-  Dropping to 2 saves 32k/core × 16 = 512k FFs (~40% of vector_registers
-  storage).
-- **Throughput cost**: Depends on register pressure in scheduled
-  program. If the compiler can fit MMfreeLM-370M in 2 registers
-  (likely possible for the simple matmul/RMS dataflow), 0% cost.
-  If not, more swaps → more cycles. Check via `swap_instructions_counter`
-  in `report_instruction_timing.py` output (currently 394 swaps at NVR=4;
-  rerun at NVR=2 to see counts).
-- **Risk**: Compiler may not gracefully degrade; need to verify
-  register-allocator works at NVR=2.
-
-#### B. `CoreInterconnectNumStages=4` (vs current 6)
+#### A. `CoreInterconnectNumStages=4 or 3` (vs current 6)
 - **FF saved per core**: 2 stages × interconnect width. CoreInterconnect
   width is ~D + control bits ≈ 1100 bits. 2 stages × 1100b × 16 cores
   ≈ 35k FFs. Smaller win.
@@ -91,7 +99,7 @@ cost (high → low ROI):**
   dropping to 4 could violate setup time on the inter-stage hop.
   Cross-SLR LAGUNA delay is 1.5-3 ns; need to confirm placement.
 
-#### C. Remove `(* MAX_FANOUT = "25" *)` source-side attributes
+#### B. Remove `(* MAX_FANOUT = "25" *)` source-side attributes
 - **FF saved**: NEGATIVE — these CAUSE replication. Removing them
   REMOVES replicas. Could save ~5-10% FF on rms_op_q,
   pipelined_mem's read_valid/write_valid q's, tmatmul/state_q.
@@ -101,7 +109,22 @@ cost (high → low ROI):**
   targets these nets; the source-side attribute may be redundant.
   But this depends on TCL targeting being good enough.
 
-#### D. `DECOUPLED_READY=0` on importvector's pmem (vs current 1)
+#### C. Single-stage `multioperand_accumulator` tree (vs default depth)
+- **FF saved per core**: Each tree stage = D × FixedPointPrecision
+  = 16k FFs. Removing 1 stage saves 16k FFs × 16 cores = **256k FFs**.
+  Removing 2 stages saves 512k FFs. This is the largest FF-saving
+  candidate on the list.
+- **Throughput cost**: Each stage removed = 1 less cycle latency on
+  tmatmul_go. Currently tmatmul_go is BW-bound per
+  `report_instruction_timing.py` (DRAM bandwidth saturating before
+  compute), so latency reduction gives near-zero throughput gain
+  but also near-zero throughput LOSS.
+- **Risk**: Combinational depth in the adder tree grows. At 300 MHz,
+  each stage handles ~3 ns of combinational add. Removing stages
+  could push setup violations into the accumulator. Run yosys-fanout
+  + a small Vivado smoke build at reduced stages before committing.
+
+#### D. `importvector` / `exportvector` `DECOUPLED_READY=0` (vs current 1)
 - **FF saved**: One full ternip_pipelined_interconnect buffer
   (DATA_WIDTH × NumLanes ≈ 1024 × 8 = 8k FFs per importvector × 4
   importvectors per core × 16 cores = 512k FFs).
@@ -112,14 +135,30 @@ cost (high → low ROI):**
   as a "Things that have been done and worked" win. Removing it
   is reverting that win.
 
-#### E. `NumLanes=4` on importvector pmem (vs current 8)
+#### E. `NumVectorRegisters=2 or 3` (vs current 4) — **BRAM saver, not FF**
+- **BRAM saved per core**: `NumVectorRegisters × D × FixedPointPrecision`
+  bits stored in BRAM (RAMB36/RAMB18). At NVR=4, D=1024, FPP=16:
+  64 Kb per core × 16 cores = 1 Mb (= ~28 RAMB36 × 16 cores = ~450 BRAMs).
+  Dropping to 2 saves ~225 BRAMs.
+- **Throughput cost**: Depends on register pressure in scheduled
+  program. If the compiler can fit MMfreeLM-370M in 2 registers
+  (likely for the simple matmul/RMS dataflow), 0% cost. If not, more
+  swaps → more cycles. Check via `swap_instructions_counter` in
+  `report_instruction_timing.py` (currently 394 swaps at NVR=4; rerun
+  at NVR=2 to see counts).
+- **Why it's listed**: BRAMs are NOT typically the congestion driver
+  on AU250 (DSP and routing usually are), but if BRAM utilization is
+  high enough to force placements into specific SLRs, reducing BRAM
+  can give the placer more flexibility.
+
+#### F. `NumLanes=4` on importvector pmem (vs current 8)
 - **FF saved**: Halves the lane count → halves lane FF overhead.
   Per-lane CE wire fanout doubles. Could regress timing.
 - **Throughput cost**: 0% (structural, not timing).
 - **Risk**: Lane count was tuned for the wide-CE problem. Going
   back risks reintroducing the FO=4163 cluster from build_9.
 
-#### F. Reduce `BatchSize-dependent` per-batch buffers
+#### G. Reduce `BatchSize-dependent` per-batch buffers
 - **FF saved**: Many modules use a buffer depth = BatchSize. At
   BatchSize=16 that's 16x the FF cost. Reducing to depth=4 saves
   3x.
@@ -128,17 +167,6 @@ cost (high → low ROI):**
   throughput model to verify.
 - **Where to look**: gbfifo_loadstore_w, gbfifo_tmatmul, FIFO depths
   in dv/ instances.
-
-#### G. Single-stage `multioperand_accumulator` (vs default)
-- **FF saved**: Each tree stage has D × FixedPointPrecision FFs.
-  Removing 1-2 stages could save ~32k FFs/core × 16 = 512k FFs.
-- **Throughput cost**: Each stage removed = 1 cycle less latency
-  on tmatmul_go. Could be net positive if tmatmul_go isn't
-  bandwidth-bound (currently it IS bandwidth-bound per
-  `report_instruction_timing.py`, so latency reduction has limited
-  benefit).
-- **Risk**: Combinational depth in the adder tree could violate
-  setup at 300 MHz. Need to balance stages vs depth.
 
 **Investigation method:** when picking the next iteration's candidate,
 run `report_instruction_timing.py` on the modified config to verify
