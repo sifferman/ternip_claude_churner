@@ -107,8 +107,84 @@ list is:
 - `LutParallelism`
 - `CoreInterconnectNumStages`
 - `BatchSize` — push this as high as possible. Target 20+.
+- `NumVectorRegisters` — BRAM-backed (see
+  `third_party/ternip/rtl/common/ternip_pipelined_mem_data_lane.sv:45`);
+  scale up if BRAM utilization is low.
 
 Don't touch other parameters. Don't introduce new configs.
+
+## The actual optimization target: tokens/second
+
+**The optimization target is `tokens/second`, NOT WNS, NOT
+utilization, NOT BatchSize, NOT MHz.** Those are intermediate
+variables. The end goal is: maximize `tokens/second = clk_freq *
+BatchSize / cycle_counter` (per `ternary_matmul/sw_utils/target/
+report_instruction_timing.py`).
+
+Constraints derived from this:
+- **Must run at 300 MHz**. The board is unreliable at other
+  frequencies (see "Target frequency" section). So WNS must close
+  (with `[advanced] skipTimingCheckAndFrequencyScaling=1`, the
+  xclbin will be packaged at 300 MHz regardless, but the design
+  must actually meet timing for the bitstream to be valid on
+  silicon).
+- **BatchSize is the multiplier**. Higher BatchSize → linearly more
+  tokens/sec (until area fills).
+- **`cycle_counter` (per-token cycle count) depends on
+  `VectorParallelism` / `LutParallelism`**. Lower VP/LP → more
+  cycles per token. Per `report_instruction_timing.py`, halving VP
+  ~doubles `cycle_counter` for non_matmul ops.
+
+Rule of thumb for picking what to change between iterations:
+1. Run `report_instruction_timing.py <config> <model>` to estimate
+   the new tokens/sec.
+2. If the change INCREASES estimated tokens/sec → try it.
+3. If the change DECREASES estimated tokens/sec → only try it if
+   it makes a stuck timing-closure problem tractable. Otherwise
+   skip.
+4. **Increasing one parameter at the cost of decreasing BatchSize
+   is almost always a net LOSS** unless the saved area unlocks a
+   much larger BatchSize next iteration.
+
+The user said it directly:
+> the actual goal is to maximize tokens/second. So if increasing
+> one parameter causes BatchSize to decrease, which causes
+> tokens/second to decrease, then ignore that change.
+
+## Utilization tracking (mandatory for every MaxCores build)
+
+Every MaxCores build's release notes MUST include a
+utilization breakdown via the `vivado-utilization` skill:
+
+```bash
+python3 .claude/skills/vivado-utilization/scripts/parse_kernel_util.py \
+    ternary_matmul/synth/pynqvivado_au250/build/xcu250_D=1024_MaxCores
+```
+
+Include both the three-way table (Platform / Kernel / Free) and
+the scaling-multiplier output. This goes in the release body as a
+section titled `## Utilization` after the timing results.
+
+**Balanced utilization heuristic**: if one resource is high (e.g.
+LUT 90%) and another is low (e.g. BRAM 10%), the next iteration
+should shift parameters to use the LOW resource — but only if
+doing so doesn't reduce `tokens/sec`:
+
+- Low BRAM → consider `NumVectorRegisters++` (uses BRAM, frees
+  swap_instructions → cycle_counter decreases → tokens/sec UP).
+- Low DSP → consider `VectorParallelism++` (uses DSPs in the
+  multiplier lanes, cycle_counter decreases → tokens/sec UP).
+- Low FF → consider re-adding pipeline stages (helps timing closure
+  without reducing tokens/sec).
+- Low LUT → harder; LUT is often the binding constraint.
+
+If a parameter change improves balance BUT forces BatchSize
+DOWN, compute the new `tokens/sec` from `report_instruction_timing.py`.
+If it's lower, SKIP the change.
+
+The whole loop reduces to: **find the (config, BatchSize) tuple
+that maximizes `BatchSize × clk_freq / cycle_counter` subject to
+"the bitstream closes at 300 MHz"**.
 
 ## Build invocation
 
@@ -531,7 +607,13 @@ failed iteration that cost nothing to start.
       `artifacts/<datecode>/build.log` so the kick doesn't truncate it.
    3. **Third (instant)**: `bash scripts/run_build.sh` to kick the
       next iteration. eq2 is busy again.
-   4. **Fourth (parallel ~5 min)**: tar the build dir into the
+   4. **Fourth (1 min, before tar)**: if this was a MaxCores build,
+      run the vivado-utilization skill against the build dir and
+      capture the output. The xpr is being wiped but
+      `kernel_util_routed.rpt` lives in `impl_1/` which is preserved
+      until v++'s new build phase touches it (a few minutes after
+      kick). Snapshot it explicitly to
+      `artifacts/<datecode>/kernel_util.txt` for the release body.
       `<datecode>/build.tar.gz` artifact. Runs alongside the new
       build's sv2v phase; harmless to both.
    5. **Fifth (parallel)**: edit the just-finished build's release
