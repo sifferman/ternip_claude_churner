@@ -81,3 +81,57 @@ net-negative" list updated.
   wrong, but because removing one cluster freed the placer to make
   worse decisions elsewhere — full lane-localization probably has the
   same risk.
+
+---
+
+## 2026-05-29 ~3:30 PM PDT: hw_emu numerical FAIL — pre-existing or build_31?
+
+The hw_emu (`make pynqvivado_au250_hw_emu`) finished and reported
+`FAILED!`. Per-output-slice fail counts (out of 5120 elements):
+
+- output.0.x_f_slice_0:  ~0 failures (clean)
+- output.0.x_c_slice_0:  11
+- output.0.x_g_slice_0:  20
+- output.0.h_t_slice_0:  1024–2865 (h_t = hidden state — first slice
+  is where the wheels fall off; everything downstream tracks h_t)
+- output.0.d_t_slice_0:  3329
+- output.0.x_o_slice_0:  2930
+- output.1+:             2900–3200 each (accumulated drift after h_t)
+
+**Why this is ambiguous wrt the build_31 change:**
+
+- **cocotb test (committed in 2e7bd80) PASSES all 4 tests**, including
+  a tmatmul_import + tmatmul_go that exercises the new
+  `ternip_pipelined_interconnect` register slice on
+  `m_axi_tmatmul_<b>_r`. Read bursts went through cleanly on all 4
+  banks. No protocol hang, no missing handshakes.
+- The build_31 RTL is bit-preserving: the pack/unpack order matches
+  `{rid, rdata, rresp, rlast}` on both sides, and
+  `ternip_pipelined_interconnect` is already used elsewhere in
+  `ternip_buffered.sv` for similar channels.
+- The first slice (x_f) is clean — the AXI handshake clearly works
+  for the first non-recurrent slice.
+- It breaks at **h_t** specifically, which is recurrent. Recurrent
+  ops use `tmatmul_import` + `tmatmul_go`, but so does the matmul
+  in x_f/x_c (which passes for x_f and barely fails for x_c).
+
+**What I would ask if I could:**
+
+1. Is the `h_t` divergence pre-existing? Was hw_emu validated on a
+   recent commit before 1aff984 (build_31)? Your note "first two
+   layers visually look pretty close" suggests the test has been
+   loose, but the user-criterion was visual — not the
+   `[FAIL] N element(s)` counter that the script prints.
+2. If pre-existing: cocotb passes, ship build_31 RTL.
+3. If new: the most suspect change is the R-channel pack/unpack
+   order. I'd re-check the `ternip_pkg::tmatmul_stream_data_t`
+   width vs `DdrDataWidth` — if the buffer's `TmatmulRChannelWidth`
+   = 8 + DdrDataWidth + 2 + 1 doesn't match what the kernel expects,
+   the test might pass cocotb (which uses AxiRamRead = passthrough)
+   but fail on the real DMA's beat boundaries.
+
+**Action:** kept eq2's `make vivado MaxCores BS=5` running with
+build_31 RTL. cocotb shows the AXI handshake is functionally
+preserved; the make vivado will measure whether the register slice
+helps timing. The numerical mismatch is its own investigation,
+separate from build_31's timing goal.
