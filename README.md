@@ -49,3 +49,19 @@ ternip_claude/
   verification, error handling, what's been tried, what to try next.
 - **[STYLE.md](STYLE.md)** — SV coding rules: ready/valid everywhere,
   `_d`/`_q` suffixes, prefer existing modules, etc.
+- **[TO-TRY.md](TO-TRY.md)** — forward-looking list of ideas to test.
+  User-Generated entries are drained first; Claude-Generated entries
+  are pulled when User queue is empty.
+
+## Two build flows
+
+Two `make` targets, two release types — **don't confuse them**:
+
+| Target | Time | Purpose |
+|---|---|---|
+| `make vivado CONFIG=...` | ~3h | **Prototyping**: kernel-only OOC PnR via `synth/vivado_generic/`. No XRT shell, no DDR controllers. Used for rapid directive / RTL search. Release title prefixed with `make vivado (prototyping)`. |
+| `make pynqvivado_au250_hw CONFIG=...` | 4-6h (OneCore), 6-8h (MaxCores) | **Validation / deliverable**: full Vitis flow with XRT shell, DDR mapping, AXI control. Produces the xclbin used on the AU250 board. Release title has no `(prototyping)` marker. |
+
+Per CLAUDE.md's HARD RULE: discovery iterations go through `make
+vivado`. `make pynqvivado_au250_hw` is reserved for candidates we
+believe will close timing.

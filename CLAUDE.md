@@ -131,7 +131,8 @@ out-of-context PnR via `synth/vivado_generic/`:
   route Explore -tns_cleanup, post_route -sll_reg_hold_fix)
 - AU250 floorplan (`floorplan/au250/floorplan.tcl`) pins
   `tmatmul_dma[b]` to SLR `<b>` to mimic DDR-bank-to-SLR mapping
-- **~1-2 hour iteration** (vs 4-6h for pynqvivado_au250)
+- **~3 hour iteration** (vs 4-6h for pynqvivado_au250 OneCore, vs
+  6-8h pynqvivado_au250 MaxCores)
 
 Caveats (`make vivado` lacks):
 - DDR controllers + their SLR-pinned routing pressure
@@ -153,6 +154,39 @@ Use `make pynqvivado_au250_hw` ONLY to:
 `make vivado` between them** is the cautionary tale that prompted
 this rule. The user explicitly: *"a 5 hour run is insane and should
 be a last resort once we know it will be extremely informative."*
+
+### `make vivado` releases + artifact staging (HARD RULE — no race)
+
+`make vivado` runs ALSO get a GitHub release per iteration, **but
+the title and body must clearly mark them as `vivado_generic`
+prototyping runs, not deliverable `pynqvivado_au250` builds.** The
+release naming convention is the same `YYYY.MM.DD-HHMM` tag.
+
+The chain rule for `make vivado` mirrors `pynqvivado_au250`'s but
+the artifact paths differ. Build dir lives at
+`ternary_matmul/synth/vivado_generic/build/<CONFIG>/vivado_generic/`.
+**The same no-race rule applies**: stage all critical artifacts to
+`artifacts/<datecode>/` BEFORE the next `make vivado` overwrites
+the build dir (the Makefile rule starts with
+`rm -rf synth/vivado_generic/build/$(CONFIG)/vivado_generic`).
+
+Critical files to stage BEFORE the next `make vivado` kick:
+1. `synth/vivado_generic/build/<CONFIG>/timing_report.txt` (kernel-
+   scoped report_timing_summary)
+2. `synth/vivado_generic/build/<CONFIG>/vivado_generic/vivado_generic.runs/impl_1/design_1_wrapper_routed.dcp`
+   (routed DCP for later `report_design_analysis` /
+   `report_qor_suggestions`)
+3. `synth/vivado_generic/build/<CONFIG>/vivado_generic/vivado_generic.runs/impl_1/design_1_wrapper_timing_summary_postroute_physopted.rpt`
+   (full timing summary)
+4. `synth/vivado_generic/build/<CONFIG>/vivado_generic/vivado_generic.runs/impl_1/design_1_wrapper_utilization_placed.rpt`
+   (utilization)
+5. Snapshot `build.log` (the local make-vivado stdout file is
+   truncated on kick).
+
+Build_25-prototyping (the first make vivado run @ MaxCores BS=8)
+lost its routed DCP this way — `rm -rf` cleared the build dir
+before staging, leaving only the WNS/TNS numbers captured from
+the live log. Don't repeat.
 
 ## The actual optimization target: tokens/second
 
