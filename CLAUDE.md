@@ -331,7 +331,13 @@ cache TTL.
 - **Sim/lint failures after RTL edit**: ALWAYS your bug. Fix before any
   Vivado build — Vivado is way too slow to debug functional issues.
 
-## Verification (run after every RTL change, BEFORE committing)
+## Verification (run BEFORE every build — no exceptions)
+
+**Run all six gates** before committing any RTL change and before
+kicking any `make vivado` or `make pynqvivado_au250_hw` build. The
+cocotb gate (#6) is mandatory because the in-tree SystemVerilog
+testbenches stub out the top-level AXI ports — only cocotb exercises
+the kernel's external `m_axi_*` / `s_axi_*` / `s_axis_*` surface.
 
 ```bash
 cd ternary_matmul
@@ -340,10 +346,39 @@ make sim TOP=tmatmul_tb SIMULATOR=verilator CONFIG=xcu250_D=1024_OneCore
 make sim TOP=tmatmul_tb SIMULATOR=vcs       CONFIG=xcu250_D=1024_OneCore
 make sim TOP=rms_tb     SIMULATOR=verilator CONFIG=xcu250_D=1024_OneCore
 make sim TOP=rms_tb     SIMULATOR=vcs       CONFIG=xcu250_D=1024_OneCore
+( cd dv/cocotb/axi_ternip_batched && make SIM=verilator CONFIG=xcu250_D=1024_OneCore )
 ```
 
 OneCore config is plenty for functional verification — MaxCores adds nothing
 besides build time. Tmatmul and rms cover the failing-path hotspots.
+The cocotb test takes ~30 s; runs reset, stall, sv->ldv round-trip
+(loadstore m_axi R+W), and tmatmul_import_smoke (descriptor channel +
+m_axi_tmatmul_<b> R-channel across all 4 banks).
+
+## hw_emu pass criterion (READ BEFORE INTERPRETING hw_emu RESULTS)
+
+`make pynqvivado_au250_hw_emu` **WILL always report `FAILED!`** at the
+end of its automated numerical check — the python comparator is too
+strict for fixed-point hardware. **Do NOT treat that as a regression.**
+
+The actual pass criterion is **the first layer's output**:
+
+- Inspect `output.0.x_f_slice_0`, `output.0.x_c_slice_0`,
+  `output.0.x_g_slice_0`, `output.0.x_o_slice_0` (the first non-
+  recurrent outputs of layer 0).
+- **PASS**: values look numerically reasonable — same order of
+  magnitude as the expected column, mostly correct signs, small
+  absolute errors. Per-slice `[FAIL] N element(s)` counter can show
+  small N (0-50) and that's fine.
+- **BROKEN**: output is mainly zeros (or NaN, or wildly off in
+  magnitude). That's a real compute-path bug — investigate before
+  kicking pynqvivado.
+- **Ignore**: `output.0.h_t_*`, `output.1.*`, and all later layers.
+  They accumulate fixed-point drift and ARE expected to fail the
+  comparator. Don't quote their fail counts as regressions.
+
+In release notes: summarize first-layer status, not the trailing
+`FAILED!`.
 
 ## Yosys source code is available
 
@@ -692,6 +727,12 @@ Attach:
 user runs this harness for days unattended; every idle hour is a
 failed iteration that cost nothing to start.
 
+0. **NEVER ask the user "should I kick build_X?" / "want me to proceed?"
+   / "go ahead with X?".** Don't wait for an okay. The user is not
+   around. Always **just kick the run** and log open questions to
+   QUESTIONS.md if needed. The smallest-blast-radius candidate from
+   TO-TRY.md (or the obvious next iteration from the prior build's
+   CSV) is always a defensible default.
 1. **At the start of every turn, check whether a build is running on
    eq2.** If not, find out why and fix it before doing anything else
    (yes, before responding to the user, before writing memory, before
