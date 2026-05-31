@@ -27,7 +27,7 @@ build it, record results, and try again** — for days, without supervision.
 
 ## Never waste a run
 
-**A Vivado build is 3–4 hours.** Treat every iteration as expensive. Before
+**A Vivado build is 3–10 hours.** Treat every iteration as expensive. Before
 committing to a build:
 
 - The RTL change must pass `make lint` and both `make sim` simulators
@@ -42,7 +42,7 @@ committing to a build:
   wrong layer. Step back, re-read the timing CSV cluster, look at
   placement, don't just keep editing RTL.
 
-A bad run costs 3–4 hours plus the storage of its tarball. A great run
+A bad run costs 3–10 hours plus the storage of its tarball. A great run
 costs the same. Spend the time pre-build to make sure you're getting a
 great run.
 
@@ -72,7 +72,8 @@ date '+%Y.%m.%d-%H:%M'      # title prefix, e.g. 2026.05.25-18:46
 ├─ Tag + create a GitHub release on ternip_claude with a short blurb
 │   and links to the submodule commits
 ├─ Kick off `make pynqvivado_au250_hw CONFIG=xcu250_D=1024_OneCore`
-│   on eq2 (see "Build invocation" below). Build takes ~3-4 hours.
+│   on eq2 (see "Build invocation" below). Build takes ~3-4 hours
+│   for OneCore, ~5-6 hours for MaxCores (sometimes 6h+).
 │   (Switch to MaxCores only once OneCore is close to passing.)
 ├─ Poll build.log every 5-15 minutes until done
 ├─ Collect artifacts:
@@ -328,6 +329,19 @@ cache TTL.
 - **`AUTO-FREQ-SCALING-04` warning**: timing didn't close at 300 MHz; Vivado
   scaled to a lower clock. Not a build failure — collect artifacts and
   read the new frequency from the warning.
+- **`VPL 18-1000 Routing results verification failed due to partially-conflicted nets`**:
+  Post-route verifier rejected a routing that route_design claimed was
+  done. **If you see this error 2× in a row on the same RTL, IT IS NOT A
+  VIVADO FLAKE.** Vivado is deterministic — build_35 (2026.05.31-02:15)
+  reproduced build_31's WNS=-2.439 bit-for-bit on the same RTL, so the
+  same input always gives the same output. Two identical failures = the
+  RTL change you most recently added is the trigger. **Bisect**: revert
+  the most recent commit, kick again. The triggering commits in the
+  build_33–34 cluster were the `axi_ternip_pipelined_interconnect_rd`
+  refactor (1fbe036) and the loadstore-slicing additions (4ae598f) —
+  both pushed placement into a configuration that left MOAs in a
+  region where post-route verification finds conflicts. See "Things
+  that were net-negative" below for full debrief.
 - **Sim/lint failures after RTL edit**: ALWAYS your bug. Fix before any
   Vivado build — Vivado is way too slow to debug functional issues.
 
@@ -354,6 +368,21 @@ besides build time. Tmatmul and rms cover the failing-path hotspots.
 The cocotb test takes ~30 s; runs reset, stall, sv->ldv round-trip
 (loadstore m_axi R+W), and tmatmul_import_smoke (descriptor channel +
 m_axi_tmatmul_<b> R-channel across all 4 banks).
+
+**The cocotb gate is non-negotiable** — the in-tree SV `tmatmul_tb`
+/ `rms_tb` stub out the top-level `axi_ternip_batched` AXI ports, so
+they cannot catch a regression on the kernel's external AXI surface
+(`m_axi_*`, `s_axi_*`, `s_axis_*`). Cocotb is the only test that
+exercises the actual top-level boundary. Run it before EVERY build,
+not just RTL changes.
+
+**Parallel hw_emu validation on eq1**: while the deliverable build
+runs on eq2 (~5-6h), kick `make pynqvivado_au250_hw_emu CONFIG=
+xcu250_D=1024_OneCore` on eq1 (~30-45 min). The OneCore hw_emu
+config uses a different build directory than eq2's MaxCores so it
+won't collide. Use the first-layer pass criterion (next section) to
+gate the deliverable: if hw_emu shows mainly zeros in layer 0, kill
+the eq2 build and investigate — the RTL is broken.
 
 ## hw_emu pass criterion (READ BEFORE INTERPRETING hw_emu RESULTS)
 
@@ -520,6 +549,48 @@ This list reflects lessons from this session — don't redo things in the
   to Explore (-0.190 / -0.607 / 8) — but added +27 min build
   time. Routing wasn't the bottleneck; depth is. Don't reapply
   unless we have specific evidence of sub-optimal routing.
+- **Descriptor-channel pipelined buffer**
+  `tmatmul_ddr_stream → dma_r_tmatmul.s_axis_read_desc_*`
+  (build_32, 2026.05.30-05:32). Pipelined the descriptor
+  request channel using `ternip_pipelined_interconnect`
+  (NumStages=6). The forward path (addr/len/valid) got
+  pipelined, but the backward `tready` direction inherited
+  the same SLR<b>→SLR0 hop **with one extra stage of late
+  arrival** — because the placer pulled `stage[0]` into the
+  DMA's pblock and `stage[0].axis_tready_reg` had to drive
+  the buffer's FIFO CE across SLRs combinational-to-reg.
+  Net result: WNS -2.439 → -4.739, 44 → 26 paths < -2 ns
+  but worst slack 2.3 ns worse. Don't redo unless you also
+  add an explicit pblock keeping `stage[0]` in the
+  BUFFER's SLR (NOT the DMA's). See release
+  `2026.05.30-0532` for the per-endpoint analysis.
+- **`axi_ternip_pipelined_interconnect_rd` chained register
+  slices on m_axi_tmatmul_<b>** (build_33 refactor of
+  build_31's R-channel slice; commit 1fbe036). Replaced
+  build_31's pack/unpack `ternip_pipelined_interconnect`
+  (one wide axis_pipeline_fifo) with NumStages chained
+  alexforencich `axi_register_rd` instances. The new module
+  is AXI4-native (no pack/unpack), separately pipelines
+  AR + R, and is structurally cleaner. But it **triggered
+  Vivado `VPL 18-1000 partially-conflicted nets` in MOA on
+  3 consecutive builds** (build_33 1st attempt + rerun +
+  build_34 with loadstore reverted). Build_35 with the
+  refactor reverted reproduced build_31's exact WNS
+  bit-for-bit. So the refactor's structure (chained register
+  slices vs one wide AXIS pipe) perturbs placement enough
+  to push MOAs into a verify-failing configuration on this
+  design. **Don't redo without pblocking the slice instances
+  away from MOA territory.** Modules themselves
+  (`third_party/ternip/rtl/axi/axi_ternip_pipelined_interconnect_{rd,wr}.sv`)
+  are correct and stay in the tree for future use.
+- **Loadstore m_axi pipelined slicing** (build_33 additional;
+  commit 4ae598f). Added `axi_ternip_pipelined_interconnect_rd`
+  on AR+R and `_wr` on AW+W+B between `dma_rw_loadstore` and
+  external `m_axi_loadstore_*`. Same Vivado verify failure as
+  the refactor above. The slicing might be viable with an
+  explicit pblock constraining the slice instances away from
+  MOA territory — but it has to be combined with that, not
+  shipped naked. Don't redo without pblock first.
 
 ### Things to try (open ideas, prioritized)
 
