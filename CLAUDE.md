@@ -780,6 +780,14 @@ Attach:
 
 ## Operational hygiene
 
+- **NEVER rerun a successful build on the same RTL/commit.** Vivado is
+  deterministic — same inputs produce bit-for-bit identical outputs
+  (build_31 = build_35 confirmed this). Re-running a passing build with
+  the same RTL state burns 5+ hours of eq2 time for zero new information.
+  The ONLY exception is when a non-deterministic Vivado failure
+  (segfault, license blip) interrupted the previous run — and even then,
+  per the "VPL 18-1000 verify failure" rule, if you see the same error
+  twice in a row, the RTL is the variable, not Vivado.
 - **One change per build**. Bundling two ideas into one iteration makes the
   result uninterpretable. If you have two ideas, do them sequentially.
 - **Don't poll too fast**. Vivado builds take hours. A 5-minute poll
