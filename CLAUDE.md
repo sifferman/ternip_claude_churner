@@ -361,7 +361,20 @@ make sim TOP=tmatmul_tb SIMULATOR=vcs       CONFIG=xcu250_D=1024_OneCore
 make sim TOP=rms_tb     SIMULATOR=verilator CONFIG=xcu250_D=1024_OneCore
 make sim TOP=rms_tb     SIMULATOR=vcs       CONFIG=xcu250_D=1024_OneCore
 ( cd dv/cocotb/axi_ternip_batched && make SIM=verilator CONFIG=xcu250_D=1024_OneCore )
+make yosys_check_pipelined          # only if RTL touched any pipelined-interconnect
 ```
+
+**Gate #7 — `make yosys_check_pipelined`**: verifies that every
+pipelined-interconnect wrapper module
+(`ternip_pipelined_interconnect`, `axi_ternip_pipelined_interconnect_{rd,wr}`)
+has ZERO comb input→output paths. The whole point of these wrappers
+is to give the placer back-to-back FF stages it can distribute across
+LAGUNA tiles for SLR crossing — any comb shortcut from a primary input
+to a primary output defeats the purpose. Uses yosys's `%coe*` selector
+(combinatorial-only forward cone) to verify; ~5 sec to run. Cheap
+enough to run before every build but strictly required after any RTL
+touch in `third_party/ternip/rtl/common/ternip_pipelined_interconnect.sv`
+or `third_party/ternip/rtl/axi/axi_ternip_pipelined_interconnect_*.sv`.
 
 OneCore config is plenty for functional verification — MaxCores adds nothing
 besides build time. Tmatmul and rms cover the failing-path hotspots.
