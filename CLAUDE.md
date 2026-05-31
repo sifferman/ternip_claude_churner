@@ -565,24 +565,31 @@ This list reflects lessons from this session — don't redo things in the
   BUFFER's SLR (NOT the DMA's). See release
   `2026.05.30-0532` for the per-endpoint analysis.
 - **`axi_ternip_pipelined_interconnect_rd` chained register
-  slices on m_axi_tmatmul_<b>** (build_33 refactor of
-  build_31's R-channel slice; commit 1fbe036). Replaced
-  build_31's pack/unpack `ternip_pipelined_interconnect`
-  (one wide axis_pipeline_fifo) with NumStages chained
-  alexforencich `axi_register_rd` instances. The new module
-  is AXI4-native (no pack/unpack), separately pipelines
-  AR + R, and is structurally cleaner. But it **triggered
-  Vivado `VPL 18-1000 partially-conflicted nets` in MOA on
-  3 consecutive builds** (build_33 1st attempt + rerun +
-  build_34 with loadstore reverted). Build_35 with the
-  refactor reverted reproduced build_31's exact WNS
-  bit-for-bit. So the refactor's structure (chained register
-  slices vs one wide AXIS pipe) perturbs placement enough
-  to push MOAs into a verify-failing configuration on this
-  design. **Don't redo without pblocking the slice instances
-  away from MOA territory.** Modules themselves
-  (`third_party/ternip/rtl/axi/axi_ternip_pipelined_interconnect_{rd,wr}.sv`)
-  are correct and stay in the tree for future use.
+  slices on m_axi_tmatmul_<b> with REG_TYPE=2 default skid
+  buffers** (build_33 refactor of build_31's R-channel slice;
+  commit 1fbe036). Replaced build_31's pack/unpack
+  `ternip_pipelined_interconnect` (axis_pipeline_fifo, 1 FF
+  per stage) with NumStages chained alexforencich
+  `axi_register_rd` instances. The default REG_TYPE=2 (skid
+  buffer) has TWO FFs per stage per signal (datapath_reg +
+  temp_reg) — vs axis_pipeline_fifo's ONE. With NumStages=6
+  × 4 banks × 523-bit data, this added **~17K extra FFs**
+  vs the equivalent pack/unpack pipeline. The extra FF mass
+  perturbed placement enough to trip Vivado
+  `VPL 18-1000 partially-conflicted nets` in MOA on 3
+  consecutive builds (build_33 1st attempt + rerun + build_34
+  with loadstore reverted). Build_35 with the refactor
+  reverted reproduced build_31's WNS bit-for-bit, confirming
+  Vivado is deterministic and the refactor was the trigger.
+  **Fix**: post-build_35, the module defaults changed to
+  REG_TYPE=1 (simple register, 1 FF per stage, inserts bubble
+  cycles — fine for kernel-boundary AXI4 where DDR latency
+  dwarfs the bubbles). FF count is now ~1.2× pack/unpack
+  (the +20% is AR pipelining, which is wanted). Modules are
+  still in the tree (`third_party/ternip/rtl/axi/`); safe to
+  instantiate with the new default. If you ever need
+  REG_TYPE=2, combine it with an explicit pblock keeping the
+  slice instances away from MOA territory.
 - **Loadstore m_axi pipelined slicing** (build_33 additional;
   commit 4ae598f). Added `axi_ternip_pipelined_interconnect_rd`
   on AR+R and `_wr` on AW+W+B between `dma_rw_loadstore` and
