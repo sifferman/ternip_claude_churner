@@ -43,3 +43,4 @@ fanout_report.txt
 *.swp
 *~
 .DS_Store
+hw_emu.log
