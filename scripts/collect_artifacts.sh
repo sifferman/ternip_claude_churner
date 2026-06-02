@@ -72,7 +72,14 @@ cat "$SUMMARY"
 echo
 echo "=== Tar build dir ==="
 if [[ -d "$BUILD_DIR" ]]; then
-    tar czf "$OUT_DIR/build.tar.gz" -C "$PROJECT_DIR/synth/pynqvivado_au250/build" "$CONFIG" 2>&1 | tail -5 || true
+    # Exclude hw_emu/ — it's a stale subdirectory holding ~5GB of old
+    # hw_emu run artifacts (xclbin + huggingface_cache + v++ temps) that
+    # accumulates inside the MaxCores build dir whenever someone runs
+    # `make pynqvivado_au250_hw_emu CONFIG=xcu250_D=1024_MaxCores`. It
+    # has nothing to do with the hardware build and bloats every tar by
+    # ~4GB, pushing it above GitHub's 2GB release-asset limit.
+    tar czf "$OUT_DIR/build.tar.gz" --exclude="$CONFIG/hw_emu" \
+        -C "$PROJECT_DIR/synth/pynqvivado_au250/build" "$CONFIG" 2>&1 | tail -5 || true
     ls -lh "$OUT_DIR/build.tar.gz"
 else
     echo "WARN: no build dir at $BUILD_DIR — skipping tar"
