@@ -38,3 +38,6 @@
 [submodule "references/analogdevicesinc-hdl"]
 	path = references/analogdevicesinc-hdl
 	url = git@github.com:analogdevicesinc/hdl.git
+[submodule "references/RapidWright"]
+	path = references/RapidWright
+	url = org-3189299@github.com:Xilinx/RapidWright.git
