@@ -22,7 +22,7 @@
 [submodule "ternary_matmul"]
 	path = ternary_matmul
 	url = git@github.com:sifferman/ternary_matmul_claude.git
-	branch = NumDdrBanksPerTmatmul
+	branch = NumTmatmulBanksPerCore
 [submodule "references/yosys"]
 	path = references/yosys
 	url = git@github.com:YosysHQ/yosys.git
