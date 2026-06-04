@@ -11,8 +11,8 @@ build it, record results, and try again** — for days, without supervision.
   ternary_matmul_claude.git`. The build harness: Makefile, configs, dv/,
   synth/ (incl. pynqvivado_au250).
 - `ternary_matmul/third_party/ternip` — nested submodule pointing at the
-  private ternip fork `git@github.com:sifferman/ternip_claude.git` on
-  branch `NumDdrBanksPerTmatmul`. RTL building blocks: math (mul/div/
+  private ternip fork `git@github.com:sifferman/ternip_claude.git`.
+  RTL building blocks: math (mul/div/
   sqrt/fixed-point convert), common (pipelined_mem,
   multioperand_accumulator, gearbox_fifo, pipelined_interconnect), fus
   (rms, tmatmul, loadstore, rowwise_operation, vector_registers),
@@ -108,9 +108,7 @@ list is:
 - `LutParallelism`
 - `CoreInterconnectNumStages`
 - `BatchSize` — push this as high as possible. Target 20+.
-- `NumVectorRegisters` — BRAM-backed (see
-  `third_party/ternip/rtl/common/ternip_pipelined_mem_data_lane.sv:45`);
-  scale up if BRAM utilization is low.
+- `NumVectorRegisters` — BRAM-backed
 
 Don't touch other parameters. Don't introduce new configs.
 
@@ -797,6 +795,30 @@ Attach:
 - `YYYY.MM.DD-HHMM.csv` (the timing CSV)
 - `build.tar.gz` (the tarred build dir — see `scripts/collect_artifacts.sh`)
 - `build.log` (snapshot before kicking the next build)
+
+### Avoid config-mismatch in release artifacts
+
+Multiple `CONFIG=...` builds share `build.log` (which lives at the
+repo root) but write their per-config artifacts into separate
+`synth/pynqvivado_au250/build/$(CONFIG)/...` directories. If a
+release stages artifacts from the wrong directory, it can claim
+OneCore results while linking a MaxCores tarball (or vice-versa) —
+silently misleading the reader.
+
+Before creating any release:
+1. **Tag every release body with the config** — both the release
+   title (e.g. `[XRT pynqvivado_au250_hw, OneCore]`) and a
+   `Config` row in the results table. Match it against the actual
+   `CONFIG=` value in `build.log`'s first
+   `make pynqvivado_au250_hw CONFIG=...` line.
+2. **When staging artifacts**, source EVERY file from
+   `synth/pynqvivado_au250/build/<CONFIG>/...` (including the
+   tar). Never glob across configs.
+3. **When tarring**, tar a *specific* `<CONFIG>` directory
+   (`tar ... -C build/ <CONFIG>`), never the parent.
+4. **Sanity check**: after staging, `grep CONFIG_FILENAME
+   artifacts/<datecode>/build.log | head -1` should name the same
+   config you just put in the title. Bail out if it doesn't.
 
 ## Operational hygiene
 
