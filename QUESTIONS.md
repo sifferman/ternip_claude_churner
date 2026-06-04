@@ -144,3 +144,60 @@ have to update `bd.tcl` to:
 For tonight, I'm pausing Phase 3 since eq2 is intentionally idle
 during the refactor. The next session will start with the wrapper
 codegen + BD rewrite, then proceed to Phase 4 cocotb at N=4.
+
+---
+
+## 2026-06-04 — Column-slice BS=1 not closing on AU250 platform
+
+`NumTmatmulBanksPerCore_2..7` all failed with `VPL 18-1000 Routing
+results verification failed due to partially-conflicted nets`, despite
+trying:
+
+- `_2`: SSI_SpreadLogic_high + NumDdr-ported MAX_FANOUT pass
+- `_3`: SSI_SpreadLogic_high + minimal vivado_common (no MAX_FANOUT)
+- `_4`: KILLED — AltSpreadLogic_high alone (no pblock)
+- `_5`: KILLED — Makefile bug (kernel.cfg cached from `_4`'s kick)
+- `_6`: KILLED — pblock TCL bracket-escape silently matched 0 cells
+- `_7`: pblock v2 matched 9732 cells (2433/bank) → still failed in
+  XRT-side H2C async clock-crossing FIFOs
+
+SLR1 CLB densities through the series: `_2` 68.68% → `_3` ~same → `_6`
+68.06% → `_7` 64.31% (with proper tmatmul_dma pblock applied).
+Tmatmul_dma is only ~1/4 of the kernel — the bulk
+(`tmatmul_units[u]/MOA/MAC`, vector_registers, loadstore DMA, central
+interconnect) is in SLR1's central ternip_core.
+
+### `_8` plan
+Extending the pblock to also pin `tmatmul_buffers[b]` (per-bank
+pipelined buffers in ternip_buffered) to SLR `b`. Won't pin
+`tmatmul_units[b]` because they share vector_register / instruction-
+stream connections that would need RTL pipeline insertion to tolerate
+cross-SLR routes.
+
+### If `_8` also fails — decision needed
+Per CLAUDE.md "3+ iterations on the same path = wrong layer," the
+options are:
+
+1. **Reduce TmatmulParallelism 256 → 128** — halves per-tmatmul-unit
+   MAC array area, halves the central column-slice compute footprint.
+   Throughput regression at BS=1 (~half tokens/sec) but unlocks
+   closure. **Outside the current MaxCores "allowed to modify"
+   list** — needs your approval.
+
+2. **Extend pblock to `tmatmul_units[b]`** — spread MOAs to SLRs too.
+   Requires RTL pipeline insertion on shared vector_request /
+   vector_read_data signals (currently combinational
+   one-hop). Big change.
+
+3. **Pivot back to NumDdrBanksPerTmatmul** — build_56 closed at BS=20
+   with 69% SLL on that branch. Column-slice's BS-scaling advantage
+   is unrealized while we can't close BS=1. The branch is preserved
+   (`sifferman/ternary_matmul_claude` `NumDdrBanksPerTmatmul`
+   `7b36013` etc.).
+
+My recommendation if `_8` fails: revert place_design back to
+SSI_SpreadLogic_high (which is hyper-tuned for SSI density issues)
+AND try (1). Reducing TmatmulParallelism is the cleanest
+architectural concession that doesn't lose column-slice's BS-scaling
+advantage; the throughput loss at BS=1 is recovered the moment BS
+ramps above ~2.
