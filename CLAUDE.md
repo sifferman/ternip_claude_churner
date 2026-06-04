@@ -92,17 +92,24 @@ even if the build itself succeeded.
 
 ## Config to use (and what you may change)
 
-**Default config: `config/xcu250_D=1024_OneCore.svh`.** Start every
-iteration with this. The only parameters in OneCore you are allowed to
-modify:
+**`NumTmatmulBanksPerCore` is ALWAYS 4 — no exceptions.** The AU250 has
+4 physical DDR banks; we want to use all of them. Column-slicing one
+core's matmul across N=4 tmatmul units is what saturates the DDR
+bandwidth and keeps SLR-crossing pressure proportional to N (constant)
+rather than to BS. **Any change that lowers N from 4 is a regression**;
+the only valid axis is BatchSize (and the other allowed parameters).
+
+**Default config: `config/xcu250_D=1024_OneCore.svh`** (N=4 BS=1).
+Start every iteration with this. The only parameters in OneCore you are
+allowed to modify:
 
 - `VectorParallelism`
 - `LutParallelism`
 - `CoreInterconnectNumStages`
 
 Once OneCore is close to passing (WNS slack within ~0.1 ns of 0), switch
-to `config/xcu250_D=1024_MaxCores.svh`. In MaxCores, the allowed-to-modify
-list is:
+to `config/xcu250_D=1024_MaxCores.svh` (N=4 BS≥1). In MaxCores, the
+allowed-to-modify list is:
 
 - `VectorParallelism`
 - `LutParallelism`
