@@ -96,3 +96,51 @@ across FUs would also unlock more throughput per cycle.
 
 Awaiting your guidance on whether to attempt option 1 (or 2 if
 you prefer the smaller scope), or stop at build_44.
+
+---
+
+## 2026-06-03 — Phase 3 BD rewrite needed before N>1 build
+
+Phase 2 RTL refactor (single-bank ternip_tmatmul + per-unit dispatch
++ generate-block N tmatmul instances in ternip_core, ternip_buffered,
+ternip_batched, axi_ternip_batched) is committed and pushed:
+
+- ternip_claude/ternary_matmul branch `NumTmatmulBanksPerCore` HEAD
+  `1e8e3a9`
+- third_party/ternip branch `NumTmatmulBanksPerCore` HEAD `6dc9819`
+- ternip_claude_churner branch `main` HEAD `6fd83ae`
+
+Verified at N=1 (OneCore): lint PASS, tmatmul_tb verilator PASS.
+N=4 (MaxCores) lint PASS.
+
+### Open question: BD packaging for N>1
+
+`axi_ternip_batched.sv` exposes `m_axi_tmatmul_*` as 2D packed arrays
+`[NumTmatmulBanksPerCore-1:0][...]`. At N=1, IP-XACT in Vivado BD
+*should* infer this as a single 1-port AXI bundle (8-bit arid stored
+as `[0:0][7:0]`), but I haven't confirmed via a synth run.
+
+At N>1, the BD needs a rewrite — the current `bd.tcl` was authored
+for `NumSeparateAxiInstances` semantics (N copies of the entire
+kernel) and would mis-instantiate everything.
+
+The cleanest approach for N>1 is one of:
+1. **Codegen**: a Python script emits a per-N RTL wrapper with N
+   separately-named AXI interfaces (`m_axi_tmatmul_0_arid`,
+   `m_axi_tmatmul_1_arid`, ...). The wrapper instantiates
+   `axi_ternip_batched` and connects.
+2. **Single shared wrapper with N AXI interfaces declared per-N
+   via SV macros / preprocessor `define**: more compact but
+   harder to read.
+
+Going with (1) is my preference for the next session. I'll also
+have to update `bd.tcl` to:
+- Instantiate ONE wrapper (not N axi_ternip_batched copies)
+- Expose N `M_AXI_<b>` ports total (was: equal to N-or-DramNumBanks)
+- Wire each `m_axi_tmatmul_<b>` to `M_AXI_<b>`
+- Merge `m_axi_loadstore` into `M_AXI_0` (so loadstore shares DDR0
+  with instruction fetch DMA)
+
+For tonight, I'm pausing Phase 3 since eq2 is intentionally idle
+during the refactor. The next session will start with the wrapper
+codegen + BD rewrite, then proceed to Phase 4 cocotb at N=4.
