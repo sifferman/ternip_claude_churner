@@ -25,6 +25,7 @@ DEFAULT_NODE_COLORS: dict[str, str] = {
     "vector_registers":   "#8c564b",  # brown
     "instruction_decode": "#7f7f7f",  # gray
     "axi_dma_instr":      "#c7c7c7",  # light gray
+    "xrt_shell":          "#999999",  # medium gray (platform/static region)
 }
 
 # Highlight override
@@ -110,6 +111,30 @@ def generate_stylesheet(
             "padding": "12px",
         },
     })
+    # SLR compound parents — represent the AU250's 4 stacked SLRs.
+    # Per-SLR pastel tint so SLR boundaries are easy to see.
+    SLR_COLORS = ["#fde0dc", "#ddebf7", "#e2efda", "#fff2cc"]  # 0..3
+    for slr_idx, slr_color in enumerate(SLR_COLORS):
+        stylesheet.append({
+            "selector": f'node[id = "slr_{slr_idx}"]',
+            "style": {
+                "background-color": slr_color,
+                "background-opacity": 0.5,
+                "border-width": 2,
+                "border-color": "#666",
+                "border-style": "dashed",
+                "shape": "round-rectangle",
+                "label": f"SLR{slr_idx}",
+                "text-valign": "top",
+                "text-halign": "left",
+                "text-margin-y": -8,
+                "text-margin-x": 12,
+                "font-size": "18px",
+                "font-weight": "bold",
+                "color": "#555",
+                "padding": "40px",
+            },
+        })
 
     # ------------------------------------------------------------------
     # Highlighted nodes — magenta border override

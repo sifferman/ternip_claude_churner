@@ -152,6 +152,16 @@ def _est_instruction_decode(params: ParamsDict) -> tuple[int, str, str]:
     return count, formula, breakdown
 
 
+def _est_xrt_shell(params: ParamsDict) -> tuple[int, str, str]:
+    # XRT static region: PCIe, AXI interconnect, memory subsystem, H2C/C2H
+    # async FIFOs, etc. Per real builds, ~174k LUTs (10% of AU250). Reported
+    # at coarse magnitude here.
+    count = 174_000
+    formula = "~174k (XRT shell static region, fixed)"
+    breakdown = f"= {count}"
+    return count, formula, breakdown
+
+
 def _est_ternip_core(params: ParamsDict) -> tuple[int, str, str]:
     # Compound — sum of typical children (MOA + IV + EV + RMS + loadstore +
     # rowwise + vector_registers + instruction_decode). Used for the
@@ -190,6 +200,7 @@ _DISPATCH = {
     "vector_registers": _est_vector_registers,
     "instruction_decode": _est_instruction_decode,
     "ternip_core": _est_ternip_core,
+    "xrt_shell": _est_xrt_shell,
 }
 
 

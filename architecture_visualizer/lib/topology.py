@@ -118,6 +118,7 @@ def _build_NumSeparateAxiInstances(
     n = int(params["NumDdrBanksUsed"])
     if n < 1:
         raise ValueError("NumDdrBanksUsed must be >= 1")
+    bs = max(int(params.get("BatchSize", 1)), 1)
     tp = int(params["TmatmulParallelism"])
     vp = int(params["VectorParallelism"])
     fxp = int(params["FixedPointPrecision"])
@@ -130,111 +131,294 @@ def _build_NumSeparateAxiInstances(
     _add_dram_banks(nodes, params, n)
 
     for i in range(n):
-        # One independent ternip_core cell per AXI instance.
-        ternip_id = f"ternip_core_i{i}"
+        # Per-AXI-instance shared blocks (1 of each per AXI cell):
+        # tmatmul_dma, axi_dma_instr, instruction_decode, the DRAM bank.
         idc_id = f"instruction_decode_i{i}"
         adi_id = f"axi_dma_instr_i{i}"
         tmd_id = f"tmatmul_dma_i{i}"
-        moa_id = f"moa_i{i}"
-        iv_id = f"importvector_i{i}"
-        ev_id = f"exportvector_i{i}"
-        rms_id = f"rms_i{i}"
-        ls_id = f"loadstore_i{i}"
-        rw_id = f"rowwise_op_i{i}"
-        vr_id = f"vector_registers_i{i}"
+        dram_id = f"dram_b{i}"
 
         nodes.append(_make_node(
-            node_id=ternip_id, label=f"ternip_core[{i}]",
-            node_type="ternip_core", params=params, core=i,
-        ))
-        nodes.append(_make_node(
             node_id=adi_id, label=f"axi_dma_instr[{i}]",
-            node_type="axi_dma_instr", params=params, core=i,
+            node_type="axi_dma_instr", params=params,
         ))
         nodes.append(_make_node(
             node_id=idc_id, label=f"instruction_decode[{i}]",
-            node_type="instruction_decode", params=params, core=i,
+            node_type="instruction_decode", params=params,
         ))
         nodes.append(_make_node(
             node_id=tmd_id, label=f"tmatmul_dma[{i}]",
-            node_type="tmatmul_dma", params=params, bank=i, core=i,
-        ))
-        nodes.append(_make_node(
-            node_id=moa_id, label=f"MOA[{i}]",
-            node_type="MOA", params=params, core=i,
-        ))
-        nodes.append(_make_node(
-            node_id=iv_id, label=f"importvector[{i}]",
-            node_type="importvector", params=params, core=i,
-        ))
-        nodes.append(_make_node(
-            node_id=ev_id, label=f"exportvector[{i}]",
-            node_type="exportvector", params=params, core=i,
-        ))
-        nodes.append(_make_node(
-            node_id=rms_id, label=f"RMS[{i}]",
-            node_type="RMS", params=params, core=i,
-        ))
-        nodes.append(_make_node(
-            node_id=ls_id, label=f"loadstore[{i}]",
-            node_type="loadstore", params=params, core=i,
-        ))
-        nodes.append(_make_node(
-            node_id=rw_id, label=f"rowwise_op[{i}]",
-            node_type="rowwise_op", params=params, core=i,
-        ))
-        nodes.append(_make_node(
-            node_id=vr_id, label=f"vector_registers[{i}]",
-            node_type="vector_registers", params=params, core=i,
+            node_type="tmatmul_dma", params=params, bank=i,
         ))
 
-        dram_id = f"dram_b{i}"
-
-        # Instruction path
+        # Instance-level edges
         edges.append(_make_edge(
             adi_id, idc_id, iw,
             "InstructionWidth (AXI DMA -> decoder)",
         ))
         edges.append(_make_edge(
-            idc_id, ternip_id, iw,
-            "InstructionWidth (decoded -> core)",
-        ))
-
-        # tmatmul DDR R-channel
-        edges.append(_make_edge(
             dram_id, tmd_id, dw,
             "DdrDataWidth (R-channel)",
         ))
+
+        # Per-core hardware INSIDE this AXI instance — BatchSize copies.
+        # Each core has its own MOA/IV/EV/RMS/loadstore/rowwise/vector_regs/
+        # tmatmul_unit. The tmatmul_dma[i] broadcasts its ternary stream
+        # to every core's MOA in this instance.
+        for c in range(bs):
+            ternip_id = f"ternip_core_i{i}_c{c}"
+            moa_id = f"moa_i{i}_c{c}"
+            iv_id = f"importvector_i{i}_c{c}"
+            ev_id = f"exportvector_i{i}_c{c}"
+            rms_id = f"rms_i{i}_c{c}"
+            ls_id = f"loadstore_i{i}_c{c}"
+            rw_id = f"rowwise_op_i{i}_c{c}"
+            vr_id = f"vector_registers_i{i}_c{c}"
+
+            nodes.append(_make_node(
+                node_id=ternip_id, label=f"ternip_core[{i},{c}]",
+                node_type="ternip_core", params=params, bank=i, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=moa_id, label=f"MOA[{i},{c}]",
+                node_type="MOA", params=params, bank=i, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=iv_id, label=f"importvector[{i},{c}]",
+                node_type="importvector", params=params, bank=i, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=ev_id, label=f"exportvector[{i},{c}]",
+                node_type="exportvector", params=params, bank=i, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=rms_id, label=f"RMS[{i},{c}]",
+                node_type="RMS", params=params, bank=i, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=ls_id, label=f"loadstore[{i},{c}]",
+                node_type="loadstore", params=params, bank=i, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=rw_id, label=f"rowwise_op[{i},{c}]",
+                node_type="rowwise_op", params=params, bank=i, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=vr_id, label=f"vector_registers[{i},{c}]",
+                node_type="vector_registers", params=params, bank=i, core=c,
+            ))
+
+            # instruction broadcast to this core
+            edges.append(_make_edge(
+                idc_id, ternip_id, iw,
+                "InstructionWidth (decoded -> core)",
+            ))
+
+            # tmatmul_dma broadcast to this core's MOA
+            edges.append(_make_edge(
+                tmd_id, moa_id, tp * 2,
+                "TmatmulParallelism * 2 (ternary stream, broadcast)",
+            ))
+            edges.append(_make_edge(
+                moa_id, ternip_id, fxp * tp,
+                "FixedPointPrecision * TmatmulParallelism (MOA result)",
+            ))
+
+            # IV/EV wide buses to/from MOA
+            edges.append(_make_edge(
+                iv_id, moa_id, tp * fxp,
+                "TmatmulParallelism * FixedPointPrecision (wide activation)",
+            ))
+            edges.append(_make_edge(
+                moa_id, ev_id, tp * fxp,
+                "TmatmulParallelism * FixedPointPrecision (wide accumulator out)",
+            ))
+
+            # Loadstore connects to this instance's DRAM bank
+            edges.append(_make_edge(
+                ls_id, dram_id, dw,
+                "DdrDataWidth (loadstore W-channel)",
+            ))
+            edges.append(_make_edge(
+                dram_id, ls_id, dw,
+                "DdrDataWidth (loadstore R-channel)",
+            ))
+
+            # Core <-> shared per-core functional units
+            edges.append(_make_edge(
+                ternip_id, rms_id, vp * fxp,
+                "VectorParallelism * FixedPointPrecision",
+            ))
+            edges.append(_make_edge(
+                ternip_id, ls_id, vp * fxp,
+                "VectorParallelism * FixedPointPrecision",
+            ))
+            edges.append(_make_edge(
+                ternip_id, rw_id, vp * fxp,
+                "VectorParallelism * FixedPointPrecision",
+            ))
+            edges.append(_make_edge(
+                ternip_id, vr_id, vp * fxp,
+                "VectorParallelism * FixedPointPrecision",
+            ))
+            edges.append(_make_edge(
+                vr_id, iv_id, vp * fxp,
+                "VectorParallelism * FixedPointPrecision",
+            ))
+            edges.append(_make_edge(
+                ev_id, vr_id, vp * fxp,
+                "VectorParallelism * FixedPointPrecision",
+            ))
+
+    # XRT shell — single platform-side node; every per-instance decoder
+    # receives its instruction stream from here.
+    nodes.append(_make_node(
+        node_id="xrt_shell", label="XRT shell",
+        node_type="xrt_shell", params=params,
+    ))
+    for i in range(n):
         edges.append(_make_edge(
-            tmd_id, moa_id, tp * 2,
-            "TmatmulParallelism * 2 (ternary stream)",
+            "xrt_shell", f"instruction_decode_i{i}", iw,
+            "InstrFetchWidth (instructions from host via XRT)",
         ))
+
+    return nodes, edges
+
+
+# ---------------------------------------------------------------------------
+# Variant: NumDdrBanksPerTmatmul
+# ---------------------------------------------------------------------------
+
+def _build_NumDdrBanksPerTmatmul(
+    params: ParamsDict,
+) -> tuple[list[Node], list[Edge]]:
+    n = int(params["NumDdrBanksUsed"])
+    if n < 1:
+        raise ValueError("NumDdrBanksUsed must be >= 1")
+    bs = max(int(params.get("BatchSize", 1)), 1)
+    tp = int(params["TmatmulParallelism"])
+    vp = int(params["VectorParallelism"])
+    fxp = int(params["FixedPointPrecision"])
+    iw = int(params["InstructionWidth"])
+    dw = int(params["DdrDataWidth"])
+
+    nodes: list[Node] = []
+    edges: list[Edge] = []
+
+    _add_dram_banks(nodes, params, n)
+
+    # Shared (single-instance) infrastructure
+    nodes.append(_make_node(
+        node_id="axi_dma_instr", label="axi_dma_instr",
+        node_type="axi_dma_instr", params=params,
+    ))
+    nodes.append(_make_node(
+        node_id="instruction_decode", label="instruction_decode",
+        node_type="instruction_decode", params=params,
+    ))
+
+    # Per-bank tmatmul_dma (shared across all BS cores; broadcast)
+    for b in range(n):
+        tmd_id = f"tmatmul_dma_b{b}"
+        nodes.append(_make_node(
+            node_id=tmd_id, label=f"tmatmul_dma[{b}]",
+            node_type="tmatmul_dma", params=params, bank=b,
+        ))
+        edges.append(_make_edge(
+            f"dram_b{b}", tmd_id, dw,
+            "DdrDataWidth (R-channel)",
+        ))
+
+    # Instruction-fetcher edges
+    edges.append(_make_edge(
+        "axi_dma_instr", "instruction_decode", iw,
+        "InstructionWidth (AXI DMA -> decoder)",
+    ))
+
+    # Per-core hardware — BatchSize copies. Each core has its OWN
+    # MOA / IV / EV / RMS / loadstore / rowwise / vector_registers / tmatmul_unit.
+    # All N tmatmul_dma streams broadcast to every core's MOA.
+    for c in range(bs):
+        ternip_id = f"ternip_core_c{c}"
+        moa_id = f"moa_c{c}"
+        iv_id = f"importvector_c{c}"
+        ev_id = f"exportvector_c{c}"
+        rms_id = f"rms_c{c}"
+        ls_id = f"loadstore_c{c}"
+        rw_id = f"rowwise_op_c{c}"
+        vr_id = f"vector_registers_c{c}"
+
+        nodes.append(_make_node(
+            node_id=ternip_id, label=f"ternip_core[{c}]",
+            node_type="ternip_core", params=params, core=c,
+        ))
+        nodes.append(_make_node(
+            node_id=moa_id, label=f"MOA[{c}]",
+            node_type="MOA", params=params, core=c,
+        ))
+        nodes.append(_make_node(
+            node_id=iv_id, label=f"importvector[{c}]",
+            node_type="importvector", params=params, core=c,
+        ))
+        nodes.append(_make_node(
+            node_id=ev_id, label=f"exportvector[{c}]",
+            node_type="exportvector", params=params, core=c,
+        ))
+        nodes.append(_make_node(
+            node_id=rms_id, label=f"RMS[{c}]",
+            node_type="RMS", params=params, core=c,
+        ))
+        nodes.append(_make_node(
+            node_id=ls_id, label=f"loadstore[{c}]",
+            node_type="loadstore", params=params, core=c,
+        ))
+        nodes.append(_make_node(
+            node_id=rw_id, label=f"rowwise_op[{c}]",
+            node_type="rowwise_op", params=params, core=c,
+        ))
+        nodes.append(_make_node(
+            node_id=vr_id, label=f"vector_registers[{c}]",
+            node_type="vector_registers", params=params, core=c,
+        ))
+
+        # All N tmatmul_dma streams broadcast to this core's MOA
+        for b in range(n):
+            edges.append(_make_edge(
+                f"tmatmul_dma_b{b}", moa_id, tp * 2,
+                "TmatmulParallelism * 2 (ternary stream, broadcast)",
+            ))
+
+        # instruction broadcast to this core
+        edges.append(_make_edge(
+            "instruction_decode", ternip_id, iw,
+            "InstructionWidth (decoded -> core)",
+        ))
+
+        # MOA <-> core
         edges.append(_make_edge(
             moa_id, ternip_id, fxp * tp,
             "FixedPointPrecision * TmatmulParallelism (MOA result)",
         ))
-
-        # importvector / exportvector
         edges.append(_make_edge(
-            iv_id, moa_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
+            iv_id, moa_id, tp * fxp,
+            "TmatmulParallelism * FixedPointPrecision (wide activation)",
         ))
         edges.append(_make_edge(
-            moa_id, ev_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
+            moa_id, ev_id, tp * fxp,
+            "TmatmulParallelism * FixedPointPrecision (wide accumulator out)",
         ))
 
-        # loadstore <-> DRAM (m_axi_loadstore[i])
+        # Loadstore connects to DRAM[0] (convention — single m_axi_loadstore)
         edges.append(_make_edge(
-            ls_id, dram_id, dw,
+            ls_id, "dram_b0", dw,
             "DdrDataWidth (loadstore W-channel)",
         ))
         edges.append(_make_edge(
-            dram_id, ls_id, dw,
+            "dram_b0", ls_id, dw,
             "DdrDataWidth (loadstore R-channel)",
         ))
 
-        # Core <-> shared per-instance functional units
+        # Core <-> shared per-core functional units
         edges.append(_make_edge(
             ternip_id, rms_id, vp * fxp,
             "VectorParallelism * FixedPointPrecision",
@@ -260,150 +444,14 @@ def _build_NumSeparateAxiInstances(
             "VectorParallelism * FixedPointPrecision",
         ))
 
-    return nodes, edges
-
-
-# ---------------------------------------------------------------------------
-# Variant: NumDdrBanksPerTmatmul
-# ---------------------------------------------------------------------------
-
-def _build_NumDdrBanksPerTmatmul(
-    params: ParamsDict,
-) -> tuple[list[Node], list[Edge]]:
-    n = int(params["NumDdrBanksUsed"])
-    if n < 1:
-        raise ValueError("NumDdrBanksUsed must be >= 1")
-    tp = int(params["TmatmulParallelism"])
-    vp = int(params["VectorParallelism"])
-    fxp = int(params["FixedPointPrecision"])
-    iw = int(params["InstructionWidth"])
-    dw = int(params["DdrDataWidth"])
-
-    nodes: list[Node] = []
-    edges: list[Edge] = []
-
-    _add_dram_banks(nodes, params, n)
-
-    # Shared infrastructure
+    # XRT shell — single platform-side node that delivers instructions.
     nodes.append(_make_node(
-        node_id="axi_dma_instr", label="axi_dma_instr",
-        node_type="axi_dma_instr", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="instruction_decode", label="instruction_decode",
-        node_type="instruction_decode", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="ternip_core", label="ternip_core",
-        node_type="ternip_core", params=params, core=0,
-    ))
-
-    # Single MOA / importvector / exportvector that consume all N streams
-    nodes.append(_make_node(
-        node_id="moa", label="MOA",
-        node_type="MOA", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="importvector", label="importvector",
-        node_type="importvector", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="exportvector", label="exportvector",
-        node_type="exportvector", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="rms", label="RMS",
-        node_type="RMS", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="loadstore", label="loadstore",
-        node_type="loadstore", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="rowwise_op", label="rowwise_op",
-        node_type="rowwise_op", params=params,
-    ))
-    nodes.append(_make_node(
-        node_id="vector_registers", label="vector_registers",
-        node_type="vector_registers", params=params,
-    ))
-
-    # Per-bank tmatmul_dma
-    for b in range(n):
-        tmd_id = f"tmatmul_dma_b{b}"
-        nodes.append(_make_node(
-            node_id=tmd_id, label=f"tmatmul_dma[{b}]",
-            node_type="tmatmul_dma", params=params, bank=b,
-        ))
-        # DRAM[b] -> tmatmul_dma[b]
-        edges.append(_make_edge(
-            f"dram_b{b}", tmd_id, dw,
-            "DdrDataWidth (R-channel)",
-        ))
-        # All N streams feed the shared MOA.
-        edges.append(_make_edge(
-            tmd_id, "moa", tp * 2,
-            "TmatmulParallelism * 2 (ternary stream)",
-        ))
-
-    # Instruction path
-    edges.append(_make_edge(
-        "axi_dma_instr", "instruction_decode", iw,
-        "InstructionWidth (AXI DMA -> decoder)",
+        node_id="xrt_shell", label="XRT shell",
+        node_type="xrt_shell", params=params,
     ))
     edges.append(_make_edge(
-        "instruction_decode", "ternip_core", iw,
-        "InstructionWidth (decoded -> core)",
-    ))
-
-    # MOA <-> core
-    edges.append(_make_edge(
-        "moa", "ternip_core", fxp * tp,
-        "FixedPointPrecision * TmatmulParallelism (MOA result)",
-    ))
-    edges.append(_make_edge(
-        "importvector", "moa", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
-    ))
-    edges.append(_make_edge(
-        "moa", "exportvector", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
-    ))
-
-    # loadstore + the rest of the FUs
-    # Loadstore is connected to bank 0 by convention (the platform's
-    # m_axi_loadstore port lives off SLR0 by default).
-    edges.append(_make_edge(
-        "loadstore", "dram_b0", dw,
-        "DdrDataWidth (loadstore W-channel)",
-    ))
-    edges.append(_make_edge(
-        "dram_b0", "loadstore", dw,
-        "DdrDataWidth (loadstore R-channel)",
-    ))
-    edges.append(_make_edge(
-        "ternip_core", "rms", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
-    ))
-    edges.append(_make_edge(
-        "ternip_core", "loadstore", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
-    ))
-    edges.append(_make_edge(
-        "ternip_core", "rowwise_op", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
-    ))
-    edges.append(_make_edge(
-        "ternip_core", "vector_registers", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
-    ))
-    edges.append(_make_edge(
-        "vector_registers", "importvector", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
-    ))
-    edges.append(_make_edge(
-        "exportvector", "vector_registers", vp * fxp,
-        "VectorParallelism * FixedPointPrecision",
+        "xrt_shell", "instruction_decode", iw,
+        "InstrFetchWidth (instructions from host via XRT)",
     ))
 
     return nodes, edges
@@ -556,14 +604,14 @@ def _build_NumTmatmulBanksPerCore(
                     "TmatmulParallelism * 2 (ternary stream, broadcast)",
                 ))
 
-            # Sub-edges within the tmatmul_unit
+            # Sub-edges within the tmatmul_unit — wide ternary buses
             edges.append(_make_edge(
-                iv_id, moa_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
+                iv_id, moa_id, tp * fxp,
+                "TmatmulParallelism * FixedPointPrecision (wide activation)",
             ))
             edges.append(_make_edge(
-                moa_id, ev_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
+                moa_id, ev_id, tp * fxp,
+                "TmatmulParallelism * FixedPointPrecision (wide accumulator out)",
             ))
             edges.append(_make_edge(
                 moa_id, unit_id, fxp * tp,
@@ -590,6 +638,17 @@ def _build_NumTmatmulBanksPerCore(
     edges.append(_make_edge(
         "axi_dma_instr", "instruction_decode", iw,
         "InstructionWidth (AXI DMA -> decoder)",
+    ))
+
+    # XRT shell — single platform-side node that delivers instructions to
+    # the decoder. axi_dma_instr remains as the kernel-side DMA bridge.
+    nodes.append(_make_node(
+        node_id="xrt_shell", label="XRT shell",
+        node_type="xrt_shell", params=params,
+    ))
+    edges.append(_make_edge(
+        "xrt_shell", "instruction_decode", iw,
+        "InstrFetchWidth (instructions from host via XRT)",
     ))
 
     return nodes, edges

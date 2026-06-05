@@ -247,6 +247,85 @@ def _edge_width_px(bus_bits: int) -> float:
     return max(1.0, min(14.0, bus_bits / 64.0))
 
 
+# ---------------------------------------------------------------------------
+# U250 layout: 4 stacked SLR bands + DRAM banks pinned per SLR + XRT below
+# ---------------------------------------------------------------------------
+
+# Vertical SLR positions (cytoscape Y axis: smaller Y = higher on canvas).
+# AU250 physical: SLR0 bottom, SLR3 top. Render SLR3 at top of canvas.
+SLR_Y = {3: -600, 2: -200, 1: 200, 0: 600}
+# DRAM bank X (left edge) — gives the U250 a "tall rectangle" shape.
+DRAM_X = -400
+# XRT shell at the very bottom — represents PCIe / host edge.
+XRT_X, XRT_Y = 0, 1000
+
+
+def _slr_parent_id(slr_idx: int) -> str:
+    return f"slr_{slr_idx}"
+
+
+def _assign_node_to_slr(n: dict, num_banks: int) -> int:
+    """Heuristic SLR assignment for layout purposes:
+       - DRAM[b] / xrt_shell: explicit slr field
+       - tmatmul_dma[b] / tmatmul_buffers[b]: SLR b (mirrors our pblock work)
+       - Anything else with bank set: SLR(bank)
+       - Anything else: SLR1 (kernel-center default)
+    """
+    if n.get("type") == "xrt_shell":
+        return 0  # placed BELOW SLR0; uses no parent in fact
+    if n.get("slr") is not None:
+        return int(n["slr"])
+    b = n.get("bank")
+    if b is not None and n["type"] in ("tmatmul_dma", "tmatmul_buffers"):
+        return int(b) % max(num_banks, 1)
+    return 1  # kernel center
+
+
+def decorate_topology_with_u250_layout(
+    nodes: list[dict],
+    num_banks: int,
+) -> list[dict]:
+    """Enrich nodes with `parent` (SLR compound) and pinned positions for
+    DRAM banks + xrt_shell. Returns the augmented node list (originals +
+    4 SLR parent dummies). The SLR parents render as compound bands.
+    """
+    out: list[dict] = []
+
+    # 4 SLR compound parent dummies (no cell_count, no bank/core).
+    for slr_idx in (3, 2, 1, 0):
+        out.append({
+            "id": _slr_parent_id(slr_idx),
+            "label": f"SLR{slr_idx}",
+            "type": "slr_parent",
+            "bank": None,
+            "core": None,
+            "cell_count": 0,
+            "slr": slr_idx,
+        })
+
+    for n in nodes:
+        nn = dict(n)
+        nt = n.get("type")
+        if nt == "xrt_shell":
+            # Pinned BELOW SLR0, no compound parent.
+            nn["pinned"] = True
+            nn["x"] = XRT_X
+            nn["y"] = XRT_Y
+        elif nt == "DRAM":
+            b = int(n.get("bank", 0))
+            slr = b  # AU250: DDR[b] -> SLR[b]
+            nn["parent"] = _slr_parent_id(slr)
+            nn["pinned"] = True
+            nn["x"] = DRAM_X
+            nn["y"] = SLR_Y.get(slr, 0)
+        else:
+            slr = _assign_node_to_slr(n, num_banks)
+            nn["parent"] = _slr_parent_id(slr)
+        out.append(nn)
+
+    return out
+
+
 def topology_to_cyto_elements(nodes: list[dict], edges: list[dict]) -> list[dict]:
     """Convert the (Node, Edge) lists into a cytoscape elements list."""
     elements: list[dict] = []
@@ -396,9 +475,16 @@ def build_sidebar_groups(nodes: list[dict]) -> list[Any]:
 app = dash.Dash(__name__, suppress_callback_exceptions=True)
 app.title = "Ternip architecture visualizer"
 
-# Initial mock
-_initial_nodes, _initial_edges = mock_topology(DEFAULT_VARIANT, DEFAULT_PARAMS)
-_initial_elements = topology_to_cyto_elements(_initial_nodes, _initial_edges)
+# Initial graph — try the real topology first, fall back to mock on failure.
+try:
+    _initial_nodes, _initial_edges = build_topology(DEFAULT_VARIANT, DEFAULT_PARAMS)
+except Exception as _e:
+    print(f"[init] build_topology failed ({_e}); falling back to mock")
+    _initial_nodes, _initial_edges = mock_topology(DEFAULT_VARIANT, DEFAULT_PARAMS)
+_initial_nodes_decorated = decorate_topology_with_u250_layout(
+    _initial_nodes, int(DEFAULT_PARAMS["NumDdrBanksUsed"])
+)
+_initial_elements = topology_to_cyto_elements(_initial_nodes_decorated, _initial_edges)
 
 # Top bar
 top_bar = html.Div([
@@ -494,7 +580,7 @@ left_panel = html.Div([
 right_sidebar = html.Div([
     html.Div("Nodes", style={"fontWeight": "bold", "marginBottom": "8px"}),
     html.Div(id="sidebar-checklist",
-             children=build_sidebar_groups(_initial_nodes)),
+             children=build_sidebar_groups(_initial_nodes_decorated)),
 ], style={
     "width": "240px",
     "padding": "12px",
@@ -509,7 +595,7 @@ cyto_pane = html.Div([
     cyto.Cytoscape(
         id="cyto-graph",
         elements=_initial_elements,
-        layout=make_layout_config(DEFAULT_LAYOUT_NAME, _initial_nodes),
+        layout=make_layout_config(DEFAULT_LAYOUT_NAME, _initial_nodes_decorated),
         stylesheet=generate_stylesheet(DEFAULT_NODE_COLORS, set()),
         style={"width": "100%", "height": "100%"},
         minZoom=0.1,
@@ -536,7 +622,7 @@ bottom_strip = html.Div([
 
 # Hidden stores
 stores = html.Div([
-    dcc.Store(id="store-nodes", data=_initial_nodes),
+    dcc.Store(id="store-nodes", data=_initial_nodes_decorated),
     dcc.Store(id="store-edges", data=_initial_edges),
     dcc.Store(id="store-highlight", data=[]),
 ])
@@ -592,6 +678,7 @@ def rebuild_graph(variant, tp_idx, vp_idx, bs, banks, layout_name):
         # the wire-length strip via an empty graph + a labeled placeholder.
         print(f"[topology] {e} — falling back to mock graph")
         nodes, edges = mock_topology(variant, params)
+    nodes = decorate_topology_with_u250_layout(nodes, int(params["NumDdrBanksUsed"]))
     elements = topology_to_cyto_elements(nodes, edges)
     layout = make_layout_config(layout_name, nodes)
     sidebar = build_sidebar_groups(nodes)
