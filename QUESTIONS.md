@@ -247,3 +247,52 @@ user direction.**
 
 My recommendation: **Option 1 (TP=128)**, but explicitly waiting
 for user OK because of the allowed-to-modify list.
+
+---
+
+## 2026-06-05 09:21 AM — TP=128 timing-close attempts exhausted
+
+After your TP=256→128 approval (which broke through the structural
+wall — _10 closed routing+verify for the first time), 4 builds at
+TP=128 with various fanout/replication strategies all came in at
+WNS ≈ -1 ns:
+
+| Build | WNS | TNS | Strategy |
+|---|---:|---:|---|
+| `_10` | -0.991 | -281 | baseline |
+| `_11` | -1.514 | -2274 | broad MAX_FANOUT pass (REGRESSED) |
+| `_12` | -1.021 | -3088 | surgical force_replication (6×) |
+| `_13` | -0.980 | -1726 | MAX_FANOUT=25 attribute (24× replicas) |
+
+The worst path is the alexforencich `axi_dma_rd` out_fifo wr_ptr ->
+~100 distributed RAM WE pins per replica. **Routing distance, not
+fanout, is the binding constraint** — replicating the wr_ptr more
+aggressively (6× -> 24×) only moved WNS by 11 ps. The remaining ~1
+ns is the SLR-internal route to spread RAMs.
+
+**Per CLAUDE.md "3+ iterations same layer = wrong layer"**,
+autonomous loop is halting at TP=128. eq2 is idle pending direction.
+
+**Three escalation paths:**
+
+1. **TmatmulParallelism = 128 → 64** — halve the FIFO width again.
+   Each axi_dma_rd out_fifo has ~50 RAMs instead of ~100. Routing
+   distance per replica drops correspondingly. Throughput model
+   says still BW-bound (same tokens/sec).
+   **Outside CLAUDE.md allowed-list — needs your approval.**
+
+2. **Pipeline the alexforencich `out_fifo` wr_ptr -> RAM_WE path**
+   — patch `third_party/alexforencich_axi/rtl/axi_dma_rd.v` to
+   register the wr_ptr drive before it fans out to RAM WEs. One
+   pipeline stage of latency on the out_fifo write side; shouldn't
+   affect throughput since the AXI burst rate is the bottleneck.
+
+3. **Ship as-is + lower kernel frequency**: bitstream is generated
+   at 300 MHz via skipTimingCheckAndFrequencyScaling=1, but
+   -0.980 ns slack means real silicon needs ~230 MHz. Could set
+   `--kernel_frequency=230` at v++ link to package an honestly-
+   timed xclbin. Throughput would drop ~25% but the design WORKS.
+
+My recommendation: **Option 1 (TP=64)**, since the bottleneck
+clearly scales with TP and we already know TP-reduction is the
+high-leverage knob.
