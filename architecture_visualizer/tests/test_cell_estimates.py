@@ -11,7 +11,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from lib.cell_estimates import estimate_cells  # noqa: E402
+from av_lib.cell_estimates import estimate_cells  # noqa: E402
 
 
 DEFAULT_PARAMS = {

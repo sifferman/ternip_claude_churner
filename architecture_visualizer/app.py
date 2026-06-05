@@ -22,9 +22,9 @@ import dash
 import dash_cytoscape as cyto
 from dash import Input, Output, State, dcc, html, no_update
 
-from lib.style import DEFAULT_NODE_COLORS, generate_stylesheet
-from lib.topology import build_topology
-from lib.throughput import compute_tokens_per_sec
+from av_lib.style import DEFAULT_NODE_COLORS, generate_stylesheet
+from av_lib.topology import build_topology
+from av_lib.throughput import compute_tokens_per_sec
 
 # Enable fcose / dagre / cola / etc. extra layouts (per Agent A's research)
 cyto.load_extra_layouts()
@@ -44,13 +44,18 @@ DEFAULT_VARIANT = "NumTmatmulBanksPerCore"
 DEFAULT_PARAMS: dict[str, int] = {
     "TmatmulParallelism": 128,
     "VectorParallelism":  4,
+    "LutParallelism":     1,
     "BatchSize":          1,
     "NumDdrBanksUsed":    4,
     "D":                  1024,
     "FixedPointPrecision": 16,
+    "FixedPointExponent": -5,
     "NumVectorRegisters":  4,
     "DdrDataWidth":        512,
+    "DdrAddressWidth":     64,
+    "ImmediateWidth":      16,
     "InstructionWidth":    128,
+    "InstrFetchWidth":     32,
     "DramNumBanks":        4,
 }
 

@@ -23,8 +23,8 @@ Three variants:
 """
 from __future__ import annotations
 
-from lib.api import ArchVariant, Edge, Node, ParamsDict
-from lib.cell_estimates import estimate_cells
+from av_lib.api import ArchVariant, Edge, Node, ParamsDict
+from av_lib.cell_estimates import estimate_cells
 
 
 # ---------------------------------------------------------------------------

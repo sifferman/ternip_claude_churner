@@ -11,8 +11,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
-from lib.api import ARCH_VARIANTS  # noqa: E402
-from lib.topology import build_topology  # noqa: E402
+from av_lib.api import ARCH_VARIANTS  # noqa: E402
+from av_lib.topology import build_topology  # noqa: E402
 
 
 DEFAULT_PARAMS = {

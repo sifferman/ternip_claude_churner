@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import math
 
-from lib.api import CellEstimate, ParamsDict
+from av_lib.api import CellEstimate, ParamsDict
 
 
 # ---------------------------------------------------------------------------
