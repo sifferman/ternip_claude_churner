@@ -264,12 +264,17 @@ def _slr_parent_id(slr_idx: int) -> str:
     return f"slr_{slr_idx}"
 
 
+_NUM_SLRS = 4  # AU250 has 4 SLRs
+
+
 def _assign_node_to_slr(n: dict, num_banks: int) -> int:
     """Heuristic SLR assignment for layout purposes:
        - DRAM[b] / xrt_shell: explicit slr field
-       - tmatmul_dma[b] / tmatmul_buffers[b]: SLR b (mirrors our pblock work)
-       - Anything else with bank set: SLR(bank)
-       - Anything else: SLR1 (kernel-center default)
+       - tmatmul_dma[b] / tmatmul_buffers[b]: SLR b (bank-affined, mirrors pblock)
+       - Anything with a `core` index: SLR(core_idx % 4) — round-robin so each
+         core (and its per-core children: MOA, IV, EV, RMS, loadstore, ...) lands
+         in the next SLR, rolling over after SLR3.
+       - Anything else: SLR1 (kernel-center default for shared singletons)
     """
     if n.get("type") == "xrt_shell":
         return 0  # placed BELOW SLR0; uses no parent in fact
@@ -278,7 +283,10 @@ def _assign_node_to_slr(n: dict, num_banks: int) -> int:
     b = n.get("bank")
     if b is not None and n["type"] in ("tmatmul_dma", "tmatmul_buffers"):
         return int(b) % max(num_banks, 1)
-    return 1  # kernel center
+    c = n.get("core")
+    if c is not None:
+        return int(c) % _NUM_SLRS
+    return 1  # kernel center for shared/single nodes
 
 
 def decorate_topology_with_u250_layout(
