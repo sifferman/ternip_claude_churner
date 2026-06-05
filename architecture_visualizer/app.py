@@ -251,13 +251,26 @@ def _edge_width_px(bus_bits: int) -> float:
 # U250 layout: 4 stacked SLR bands + DRAM banks pinned per SLR + XRT below
 # ---------------------------------------------------------------------------
 
-# Vertical SLR positions (cytoscape Y axis: smaller Y = higher on canvas).
-# AU250 physical: SLR0 bottom, SLR3 top. Render SLR3 at top of canvas.
-SLR_Y = {3: -600, 2: -200, 1: 200, 0: 600}
-# DRAM bank X (left edge) — gives the U250 a "tall rectangle" shape.
-DRAM_X = -400
-# XRT shell at the very bottom — represents PCIe / host edge.
-XRT_X, XRT_Y = 0, 1000
+# U250 has 4 SLRs stacked vertically. Render SLR3 on top, SLR0 on bottom.
+# Each SLR band: same width, same height, evenly spaced.
+SLR_BAND_WIDTH = 1400
+SLR_BAND_HEIGHT = 380
+SLR_BAND_GAP = 20  # vertical gap between adjacent SLR bands
+SLR_BAND_X = 0     # all bands centered on x=0
+
+# Vertical positions (cytoscape Y axis: smaller Y = higher on canvas).
+# SLR3 at top (small Y), SLR0 at bottom (large Y).
+SLR_Y = {
+    3: -1.5 * (SLR_BAND_HEIGHT + SLR_BAND_GAP),
+    2: -0.5 * (SLR_BAND_HEIGHT + SLR_BAND_GAP),
+    1:  0.5 * (SLR_BAND_HEIGHT + SLR_BAND_GAP),
+    0:  1.5 * (SLR_BAND_HEIGHT + SLR_BAND_GAP),
+}
+# DRAM bank X (left edge of each band).
+DRAM_X = -SLR_BAND_WIDTH / 2 + 80
+# XRT shell positioned BELOW SLR0, centered on x.
+XRT_X = 0
+XRT_Y = SLR_Y[0] + SLR_BAND_HEIGHT / 2 + 120
 
 
 def _slr_parent_id(slr_idx: int) -> str:
@@ -293,42 +306,77 @@ def decorate_topology_with_u250_layout(
     nodes: list[dict],
     num_banks: int,
 ) -> list[dict]:
-    """Enrich nodes with `parent` (SLR compound) and pinned positions for
-    DRAM banks + xrt_shell. Returns the augmented node list (originals +
-    4 SLR parent dummies). The SLR parents render as compound bands.
+    """Enrich nodes with U250-shape layout metadata.
+
+    Adds 4 `slr_band_X` background rectangle nodes — locked, fixed-size,
+    fixed-position. They render behind the kernel nodes via z-index and
+    give the canvas the AU250's 4-stack visual shape regardless of how
+    many children land in each SLR.
+
+    DRAM banks get pinned (x, y) at the left edge of their respective
+    SLR band. The xrt_shell node is pinned BELOW SLR0 (PCIe edge).
+
+    All other nodes get a starting (x, y) inside their assigned SLR
+    band — fcose treats this as an initial seed and refines (no
+    `pinned`, so they remain draggable and force-directed).
     """
     out: list[dict] = []
 
-    # 4 SLR compound parent dummies (no cell_count, no bank/core).
+    # 4 SLR background-band rectangles — locked, fixed dimensions.
     for slr_idx in (3, 2, 1, 0):
         out.append({
-            "id": _slr_parent_id(slr_idx),
+            "id": f"slr_band_{slr_idx}",
             "label": f"SLR{slr_idx}",
-            "type": "slr_parent",
+            "type": "slr_band",
             "bank": None,
             "core": None,
             "cell_count": 0,
             "slr": slr_idx,
+            "pinned": True,
+            "x": SLR_BAND_X,
+            "y": SLR_Y[slr_idx],
+            "width": SLR_BAND_WIDTH,
+            "height": SLR_BAND_HEIGHT,
         })
+
+    # Per-SLR rolling counter for spreading non-pinned nodes along the
+    # band's X axis so they don't all start in the same pixel.
+    slr_seq_counter: dict[int, int] = {0: 0, 1: 0, 2: 0, 3: 0}
 
     for n in nodes:
         nn = dict(n)
         nt = n.get("type")
         if nt == "xrt_shell":
-            # Pinned BELOW SLR0, no compound parent.
+            # Pinned BELOW SLR0 (off-chip / PCIe edge).
             nn["pinned"] = True
             nn["x"] = XRT_X
             nn["y"] = XRT_Y
         elif nt == "DRAM":
             b = int(n.get("bank", 0))
             slr = b  # AU250: DDR[b] -> SLR[b]
-            nn["parent"] = _slr_parent_id(slr)
+            nn["slr"] = slr
             nn["pinned"] = True
             nn["x"] = DRAM_X
             nn["y"] = SLR_Y.get(slr, 0)
         else:
             slr = _assign_node_to_slr(n, num_banks)
-            nn["parent"] = _slr_parent_id(slr)
+            nn["slr"] = slr  # used by sidebar + initial position
+            seq = slr_seq_counter[slr]
+            slr_seq_counter[slr] = seq + 1
+            # Spread seed positions across the band so fcose has room
+            # to disperse from. Bias toward the right of the band (DRAM
+            # banks sit on the left).
+            band_inner_left = -SLR_BAND_WIDTH / 2 + 200
+            band_inner_right = SLR_BAND_WIDTH / 2 - 60
+            band_inner_w = band_inner_right - band_inner_left
+            # Grid-spread: alternating rows + columns within the band.
+            row = seq % 3
+            col = seq // 3
+            n_cols = max(1, int(band_inner_w / 120))
+            x = band_inner_left + (col % n_cols) * 120 + 60
+            y = SLR_Y[slr] + (row - 1) * 90
+            nn["x"] = x
+            nn["y"] = y
         out.append(nn)
 
     return out
@@ -339,13 +387,23 @@ def topology_to_cyto_elements(nodes: list[dict], edges: list[dict]) -> list[dict
     elements: list[dict] = []
 
     for n in nodes:
+        # Width/height: slr_band has fixed dimensions; everything else
+        # derives radius from cell_count.
+        if n["type"] == "slr_band":
+            w = float(n.get("width", SLR_BAND_WIDTH))
+            h = float(n.get("height", SLR_BAND_HEIGHT))
+        else:
+            w = h = float(_radius_px(int(n.get("cell_count", 0))))
+
         cyto_node: dict[str, Any] = {
             "data": {
                 "id": n["id"],
                 "label": n.get("label", n["id"]),
                 "type": n["type"],
                 "cell_count": int(n.get("cell_count", 0)),
-                "radius_px": _radius_px(int(n.get("cell_count", 0))),
+                "radius_px": w if n["type"] != "slr_band" else _radius_px(int(n.get("cell_count", 0))),
+                "band_w": w,
+                "band_h": h,
                 "bank": n.get("bank"),
                 "core": n.get("core"),
                 "slr": n.get("slr"),
@@ -357,14 +415,16 @@ def topology_to_cyto_elements(nodes: list[dict], edges: list[dict]) -> list[dict
         if parent:
             cyto_node["data"]["parent"] = parent
 
-        # Pin DRAM banks (or any node with explicit x/y + pinned=True)
+        # Pin DRAM banks, SLR bands, XRT shell — all locked at fixed (x,y)
         if n.get("pinned"):
             cyto_node["position"] = {
                 "x": float(n.get("x", 0)),
                 "y": float(n.get("y", 0)),
             }
             cyto_node["locked"] = True
-            cyto_node["grabbable"] = False
+            cyto_node["grabbable"] = (n["type"] != "slr_band")  # bands not draggable
+            if n["type"] == "slr_band":
+                cyto_node["selectable"] = False
         elif "x" in n and "y" in n:
             cyto_node["position"] = {"x": float(n["x"]), "y": float(n["y"])}
 
@@ -391,9 +451,13 @@ def make_layout_config(layout_name: str, nodes: list[dict]) -> dict:
     so they snap to the top row across re-layouts.
     """
     if layout_name == "fcose":
+        # Pin everything that has explicit (x, y) — SLR bands, DRAM
+        # banks, XRT shell, AND seeded kernel positions. fcose will
+        # repulse-refine the kernel nodes from those seeds, keeping
+        # them roughly inside their assigned SLR band.
         pinned = [
             {"nodeId": n["id"], "position": {"x": float(n.get("x", 0)),
-                                              "y": float(n.get("y", -400))}}
+                                              "y": float(n.get("y", 0))}}
             for n in nodes if n.get("pinned")
         ]
         cfg: dict[str, Any] = {
@@ -408,9 +472,11 @@ def make_layout_config(layout_name: str, nodes: list[dict]) -> dict:
         }
         if pinned:
             cfg["fixedNodeConstraint"] = pinned
-            ids = [p["nodeId"] for p in pinned]
-            cfg["alignmentConstraint"] = {"horizontal": [ids]}
         return cfg
+    if layout_name == "preset":
+        # Use seeded positions verbatim. Best when you want strict
+        # SLR-band containment with no force-directed re-arrangement.
+        return {"name": "preset", "padding": 30, "animate": False, "fit": True}
     if layout_name == "dagre":
         return {"name": "dagre", "rankDir": "TB", "padding": 30, "animate": False}
     if layout_name == "cose":
@@ -426,19 +492,23 @@ def build_sidebar_groups(nodes: list[dict]) -> list[Any]:
     """Return the right-sidebar's hierarchical checklist as a Dash component
     tree. Returns a list of html.Div sections; each holds a header + checklist.
     """
-    dram = [n for n in nodes if n["type"] == "DRAM"]
-    shared = [n for n in nodes
-              if n["type"] in ("axi_dma_instr", "instruction_decode")]
+    # Exclude SLR bands (decoration only) from the sidebar list.
+    selectable = [n for n in nodes if n["type"] != "slr_band"]
+    dram = [n for n in selectable if n["type"] == "DRAM"]
+    shared = [n for n in selectable
+              if n["type"] in ("axi_dma_instr", "instruction_decode",
+                                "xrt_shell")]
     # Group remaining by core
     cores: dict[int, list[dict]] = {}
-    for n in nodes:
+    for n in selectable:
         c = n.get("core")
         if c is None or n["type"] in ("DRAM", "axi_dma_instr",
-                                      "instruction_decode", "tmatmul_dma"):
+                                      "instruction_decode", "tmatmul_dma",
+                                      "xrt_shell"):
             continue
         cores.setdefault(int(c), []).append(n)
 
-    tmatmul_dmas = [n for n in nodes if n["type"] == "tmatmul_dma"]
+    tmatmul_dmas = [n for n in selectable if n["type"] == "tmatmul_dma"]
 
     sections: list[Any] = []
 

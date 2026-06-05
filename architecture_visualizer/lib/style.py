@@ -111,28 +111,37 @@ def generate_stylesheet(
             "padding": "12px",
         },
     })
-    # SLR compound parents — represent the AU250's 4 stacked SLRs.
-    # Per-SLR pastel tint so SLR boundaries are easy to see.
+    # SLR background bands — fixed-size rectangles drawn BEHIND kernel
+    # nodes via z-compound-depth. Per-SLR pastel tint so SLR boundaries
+    # are easy to see.
     SLR_COLORS = ["#fde0dc", "#ddebf7", "#e2efda", "#fff2cc"]  # 0..3
+    stylesheet.append({
+        "selector": 'node[type = "slr_band"]',
+        "style": {
+            "shape": "round-rectangle",
+            "width": "data(band_w)",
+            "height": "data(band_h)",
+            "background-opacity": 0.45,
+            "border-width": 2,
+            "border-color": "#666",
+            "border-style": "dashed",
+            "label": "data(label)",
+            "text-valign": "top",
+            "text-halign": "left",
+            "text-margin-y": 16,
+            "text-margin-x": 24,
+            "font-size": "20px",
+            "font-weight": "bold",
+            "color": "#444",
+            "z-compound-depth": "bottom",
+            "z-index": -1,
+        },
+    })
     for slr_idx, slr_color in enumerate(SLR_COLORS):
         stylesheet.append({
-            "selector": f'node[id = "slr_{slr_idx}"]',
+            "selector": f'node[id = "slr_band_{slr_idx}"]',
             "style": {
                 "background-color": slr_color,
-                "background-opacity": 0.5,
-                "border-width": 2,
-                "border-color": "#666",
-                "border-style": "dashed",
-                "shape": "round-rectangle",
-                "label": f"SLR{slr_idx}",
-                "text-valign": "top",
-                "text-halign": "left",
-                "text-margin-y": -8,
-                "text-margin-x": 12,
-                "font-size": "18px",
-                "font-weight": "bold",
-                "color": "#555",
-                "padding": "40px",
             },
         })
 
