@@ -201,3 +201,49 @@ AND try (1). Reducing TmatmulParallelism is the cleanest
 architectural concession that doesn't lose column-slice's BS-scaling
 advantage; the throughput loss at BS=1 is recovered the moment BS
 ramps above ~2.
+
+---
+
+## 2026-06-04 21:55 PM — Pblock-only experiments exhausted
+
+`_9` (range pblock) failed VPL 18-1000 in `ip_cc_axi_data_h2c_00`
+async FIFO. Updated pblock results table:
+
+| | tmatmul_dma | tmatmul_buffers | SLR1 CLB% | Failure |
+|---|---|---|---:|---|
+| `_7` | per-SLR | none | 64.3 | VPL 18-1000 XRT h2c_00 + h2c_01 |
+| `_8` | per-SLR | per-SLR | 35.2 | VPL 35-3303 routing congestion |
+| `_9` | range (lower/upper) | range | 57.2 | VPL 18-1000 XRT h2c_00 only |
+
+**No pblock variant reaches a closing zone.** The kernel
+(MaxCores N=4 BS=1 with TmatmulParallelism=256) is structurally
+too dense for the AU250 platform's routing budget when 4 m_axi
+ports are added. Per CLAUDE.md "3+ iterations on the same layer
+= wrong layer" — we're at 5. **eq2 is intentionally idle pending
+user direction.**
+
+**Decision needed**:
+
+1. **TmatmulParallelism 256 → 128**: cleanest single-knob fix. Halves
+   per-tmatmul-unit MAC array area (4 units × half size each = same
+   total compute as 2 full units, just spread differently). Throughput
+   model needs update; from `report_instruction_timing.py` rough math,
+   tokens/sec at BS=1 would roughly halve (~50 vs ~101), but the
+   bottleneck moves OFF placement and BS scaling becomes viable.
+   **CLAUDE.md says this is outside the MaxCores allowed-to-modify
+   list — needs explicit user approval.**
+
+2. **RTL pipeline insertion on cross-SLR signals**: surgical RTL
+   change to insert FIFO/register stages on the gearbox→tmatmul
+   R-data path. Makes cross-SLR routing feasible at full
+   TmatmulParallelism=256. Multi-day implementation + verification
+   effort.
+
+3. **Pivot back to NumDdrBanksPerTmatmul**: build_56 (the last
+   commit there) was at BS=20. Per CLAUDE.md memory, BS=6 already
+   trips VPL 18-1000 on NumDdr — so build_56 may not have actually
+   closed cleanly either. This pivot has the lowest blast radius
+   *if* a known-good NumDdr build exists at lower BS.
+
+My recommendation: **Option 1 (TP=128)**, but explicitly waiting
+for user OK because of the allowed-to-modify list.
