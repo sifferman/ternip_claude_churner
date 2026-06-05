@@ -59,7 +59,7 @@ TP_VALUES = [16, 32, 64, 128, 256, 512]
 VP_VALUES = [1, 2, 4, 8, 16]
 
 # Layouts the user can switch between (default = Agent A's fcose recommendation).
-DEFAULT_LAYOUT_NAME = "fcose"
+DEFAULT_LAYOUT_NAME = "preset"
 
 
 # ---------------------------------------------------------------------------
@@ -363,18 +363,33 @@ def decorate_topology_with_u250_layout(
             nn["slr"] = slr  # used by sidebar + initial position
             seq = slr_seq_counter[slr]
             slr_seq_counter[slr] = seq + 1
-            # Spread seed positions across the band so fcose has room
-            # to disperse from. Bias toward the right of the band (DRAM
-            # banks sit on the left).
+
+            # Pack the band's interior with a dense grid. Reserve the
+            # leftmost ~140 px for the DRAM bank (which is pinned at
+            # DRAM_X). Use the rest for kernel nodes.
             band_inner_left = -SLR_BAND_WIDTH / 2 + 200
             band_inner_right = SLR_BAND_WIDTH / 2 - 60
-            band_inner_w = band_inner_right - band_inner_left
-            # Grid-spread: alternating rows + columns within the band.
-            row = seq % 3
-            col = seq // 3
-            n_cols = max(1, int(band_inner_w / 120))
-            x = band_inner_left + (col % n_cols) * 120 + 60
-            y = SLR_Y[slr] + (row - 1) * 90
+            band_inner_w = band_inner_right - band_inner_left  # ~1140 px
+            band_inner_top = SLR_Y[slr] - SLR_BAND_HEIGHT / 2 + 60
+            band_inner_bot = SLR_Y[slr] + SLR_BAND_HEIGHT / 2 - 40
+            band_inner_h = band_inner_bot - band_inner_top      # ~280 px
+
+            # Dense grid: 70px x-pitch, 50px y-pitch.
+            x_pitch = 70
+            y_pitch = 50
+            n_cols = max(1, int(band_inner_w / x_pitch))
+            col = seq % n_cols
+            row = seq // n_cols
+            n_rows_avail = max(1, int(band_inner_h / y_pitch))
+
+            x = band_inner_left + col * x_pitch + 35
+            # If we overflow the available rows, wrap and step the col
+            # half-pitch right to interleave (avoids exact overlap).
+            row_in_band = row % n_rows_avail
+            wrap = row // n_rows_avail
+            y = band_inner_top + row_in_band * y_pitch + 25
+            x += wrap * (x_pitch / 2)
+
             nn["x"] = x
             nn["y"] = y
         out.append(nn)
@@ -581,8 +596,8 @@ top_bar = html.Div([
     dcc.Dropdown(
         id="layout-dropdown",
         options=[{"label": n, "value": n}
-                 for n in ("fcose", "dagre", "cose", "cose-bilkent", "cola",
-                           "concentric", "circle", "grid")],
+                 for n in ("preset", "fcose", "dagre", "cose", "cose-bilkent",
+                           "cola", "concentric", "circle", "grid")],
         value=DEFAULT_LAYOUT_NAME,
         clearable=False,
         style={"display": "inline-block", "width": "180px",
