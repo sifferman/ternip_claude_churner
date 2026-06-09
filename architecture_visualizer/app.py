@@ -705,10 +705,13 @@ cyto_pane = html.Div([
           "background": "#ffffff", "minWidth": "0"})
 
 
-# Bottom strip — wire-length readout
+# Bottom strip — wire-length readout + edge-hover readout
 bottom_strip = html.Div([
     html.Span(id="wire-length-readout",
               children="Total wire length: (drag a node to compute)"),
+    html.Span("  |  ", style={"color": "#888"}),
+    html.Span(id="edge-hover-readout",
+              children="Hover over a net to see its bit width."),
 ], style={
     "padding": "8px 16px",
     "borderTop": "1px solid #ccc",
@@ -824,15 +827,13 @@ def compute_tokens(n_clicks, variant, tp_idx, vp_idx, bs, banks):
         "VectorParallelism":  VP,
         "BatchSize":          BS,
         "NumDdrBanksUsed":    N,
-        # Map variant-specific N alias for the throughput math:
-        "NumTmatmulBanksPerCore": N if variant == "NumTmatmulBanksPerCore" else 1,
         # Defaults the throughput math expects:
         "DramMaxBytesPerSecond": 8 * 2400.0 * 10**6,
         "ClockPeriod": 3.333e-9,
     })
 
     try:
-        result = compute_tokens_per_sec(cfg, "MMfreeLM-370M")
+        result = compute_tokens_per_sec(cfg, "MMfreeLM-370M", variant=variant)
     except Exception as e:
         return f"compute_tokens_per_sec failed: {type(e).__name__}: {e}"
 
@@ -845,6 +846,21 @@ def compute_tokens(n_clicks, variant, tp_idx, vp_idx, bs, banks):
         f"singlecore      : {sc:>12,.2f} tok/s @ {mhz:.1f} MHz\n"
         f"multicore       : {mc:>12,.2f} tok/s @ {mhz:.1f} MHz"
     )
+
+
+@app.callback(
+    Output("edge-hover-readout", "children"),
+    Input("cyto-graph", "mouseoverEdgeData"),
+)
+def update_edge_hover(edge_data):
+    if not edge_data:
+        return "Hover over a net to see its bit width."
+    bus_bits = edge_data.get("bus_bits", "?")
+    formula = edge_data.get("formula", "")
+    src = edge_data.get("source", "?")
+    dst = edge_data.get("target", "?")
+    formula_part = f" = {formula}" if formula else ""
+    return f"{src} -> {dst}: {bus_bits} bits{formula_part}"
 
 
 @app.callback(

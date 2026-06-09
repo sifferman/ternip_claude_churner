@@ -163,22 +163,14 @@ def _est_xrt_shell(params: ParamsDict) -> tuple[int, str, str]:
 
 
 def _est_ternip_core(params: ParamsDict) -> tuple[int, str, str]:
-    # Compound — sum of typical children (MOA + IV + EV + RMS + loadstore +
-    # rowwise + vector_registers + instruction_decode). Used for the
-    # NumSeparateAxiInstances variant where each AXI instance is one ternip_core.
-    moa, _, _ = _est_MOA(params)
-    iv, _, _ = _est_importvector(params)
-    ev, _, _ = _est_exportvector(params)
-    rms, _, _ = _est_RMS(params)
-    ls, _, _ = _est_loadstore(params)
-    rw, _, _ = _est_rowwise_op(params)
-    vr, _, _ = _est_vector_registers(params)
-    idc, _, _ = _est_instruction_decode(params)
-    count = moa + iv + ev + rms + ls + rw + vr + idc
-    formula = "MOA + IV + EV + RMS + loadstore + rowwise + vector_registers + instruction_decode"
-    breakdown = (
-        f"{moa} + {iv} + {ev} + {rms} + {ls} + {rw} + {vr} + {idc} = {count}"
-    )
+    # Arbitration glue only — the per-core FSM, instruction-dispatch mux, and
+    # vector_register port arbitration. Children (MOA, IV, EV, RMS, etc.) are
+    # rendered as separate nodes with their own cell counts; summing them
+    # here would double-count. Order-of-magnitude estimate: ~3k LUT for the
+    # FSM + arbiter logic.
+    count = 3000
+    formula = "~3k LUT (FSM + arbitration glue; children counted separately)"
+    breakdown = f"= {count}"
     return count, formula, breakdown
 
 

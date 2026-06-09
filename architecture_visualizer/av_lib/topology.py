@@ -41,8 +41,14 @@ _DEFAULTS: dict = {
     "NumVectorRegisters": 4,
     "DdrDataWidth": 512,
     "InstructionWidth": 128,
+    "InstrFetchWidth": 32,
+    "CoreInterconnectNumStages": 8,
     "DramNumBanks": 4,
 }
+
+
+# AXI-Lite control bus width (s_axi_stall, s_axi_rst, s_axi_debug bundled).
+_AXI_LITE_WIDTH = 32
 
 
 def _merge_defaults(params: ParamsDict) -> dict:
@@ -78,13 +84,54 @@ def _make_node(
     }
 
 
-def _make_edge(source: str, target: str, bus_bits: int, formula: str) -> Edge:
-    return {
+def _make_edge(
+    source: str,
+    target: str,
+    bus_bits: int,
+    formula: str,
+    pipeline_stages: int = 0,
+) -> Edge:
+    edge: Edge = {
         "source": source,
         "target": target,
         "bus_bits": int(bus_bits),
         "formula": formula,
     }
+    if pipeline_stages > 0:
+        edge["pipeline_stages"] = int(pipeline_stages)
+    return edge
+
+
+def _add_vr_fu_edges(
+    edges: list,
+    vr_id: str,
+    rms_id: str,
+    ls_id: str,
+    rw_id: str,
+    iv_ids: list[str],
+    ev_ids: list[str],
+    vp: int,
+    fxp: int,
+) -> None:
+    """Add the standard data-path edges between vector_registers and each FU.
+
+    In ternip_core.sv, vector_registers has a single shared read/write port
+    OR-muxed across all FUs (loadstore + rms + rowwise + N tmatmul_units' IV
+    and EV). The visualizer represents this as direct VR<->FU edges, one per
+    FU, all VP*FxP wide (the vector_chunk_t width).
+    """
+    bw = vp * fxp
+    formula = "VectorParallelism * FixedPointPrecision (vector_chunk_t)"
+    # RMS / loadstore / rowwise_operation: bidirectional through VR's port.
+    for fu in (rms_id, ls_id, rw_id):
+        edges.append(_make_edge(vr_id, fu, bw, formula))
+        edges.append(_make_edge(fu, vr_id, bw, formula))
+    # importvector: VR reads -> IV (per-unit or per-core IV)
+    for iv in iv_ids:
+        edges.append(_make_edge(vr_id, iv, bw, formula))
+    # exportvector: EV writes -> VR (per-unit or per-core EV)
+    for ev in ev_ids:
+        edges.append(_make_edge(ev, vr_id, bw, formula))
 
 
 # ---------------------------------------------------------------------------
@@ -115,6 +162,10 @@ def _add_dram_banks(
 def _build_NumSeparateAxiInstances(
     params: ParamsDict,
 ) -> tuple[list[Node], list[Edge]]:
+    """N parallel AXI instances. Each is a self-contained kernel boundary
+    with its own m_axi_tmatmul, m_axi_loadstore, axi_dma_instr, and N=1
+    per-instance ternip_core (replicated BS times via the gearbox-shared
+    DDR bus). ImportVectorLength = D (no column-slicing)."""
     n = int(params["NumDdrBanksUsed"])
     if n < 1:
         raise ValueError("NumDdrBanksUsed must be >= 1")
@@ -123,16 +174,32 @@ def _build_NumSeparateAxiInstances(
     vp = int(params["VectorParallelism"])
     fxp = int(params["FixedPointPrecision"])
     iw = int(params["InstructionWidth"])
+    ifw = int(params.get("InstrFetchWidth", 32))
     dw = int(params["DdrDataWidth"])
+    d = int(params["D"])
+    pipe_stages = int(params.get("CoreInterconnectNumStages", 8))
+
+    # Each AXI instance has its own tmatmul, full-D-wide.
+    ivl = d
+    ivr = min(tp, ivl)               # ImportVectorRowWidth
+    row_parallelism = max(1, tp // ivl)
+    moa_out_bits = row_parallelism * fxp
+    iv_to_moa_bits = ivr * fxp       # IV -> MOA activation bus
 
     nodes: list[Node] = []
     edges: list[Edge] = []
 
     _add_dram_banks(nodes, params, n)
 
+    # XRT shell — single platform-side node, drives AXI-Lite control to
+    # every kernel instance and writes instructions to DRAM (host-side).
+    nodes.append(_make_node(
+        node_id="xrt_shell", label="XRT shell",
+        node_type="xrt_shell", params=params,
+    ))
+
     for i in range(n):
         # Per-AXI-instance shared blocks (1 of each per AXI cell):
-        # tmatmul_dma, axi_dma_instr, instruction_decode, the DRAM bank.
         idc_id = f"instruction_decode_i{i}"
         adi_id = f"axi_dma_instr_i{i}"
         tmd_id = f"tmatmul_dma_i{i}"
@@ -151,20 +218,35 @@ def _build_NumSeparateAxiInstances(
             node_type="tmatmul_dma", params=params, bank=i,
         ))
 
-        # Instance-level edges
+        # Instruction path: host writes to DRAM; kernel DMA-reads them out.
+        # DRAM -> axi_dma_instr (DdrDataWidth) -> instruction_decode
+        # (InstrFetchWidth=32 AXIS surface) -> ternip_core (InstructionWidth=128).
         edges.append(_make_edge(
-            adi_id, idc_id, iw,
-            "InstructionWidth (AXI DMA -> decoder)",
+            dram_id, adi_id, dw,
+            "DdrDataWidth (instruction DMA reads from DRAM)",
         ))
         edges.append(_make_edge(
+            adi_id, idc_id, ifw,
+            "InstrFetchWidth (AXIS instruction stream)",
+        ))
+
+        # Ternary weight stream: DRAM -> tmatmul_dma -> per-core MOAs
+        edges.append(_make_edge(
             dram_id, tmd_id, dw,
-            "DdrDataWidth (R-channel)",
+            "DdrDataWidth (R-channel ternary weights)",
+        ))
+
+        # AXI-Lite control bundle from XRT shell (s_axi_stall, s_axi_rst,
+        # s_axi_debug, axi_dma's S_AXI_LITE — all small AXI-Lite buses).
+        edges.append(_make_edge(
+            "xrt_shell", adi_id, _AXI_LITE_WIDTH,
+            "AXI-Lite control (bundled: stall, rst, debug, dma_lite)",
         ))
 
         # Per-core hardware INSIDE this AXI instance — BatchSize copies.
-        # Each core has its own MOA/IV/EV/RMS/loadstore/rowwise/vector_regs/
-        # tmatmul_unit. The tmatmul_dma[i] broadcasts its ternary stream
-        # to every core's MOA in this instance.
+        # Each core has its own MOA / IV / EV / RMS / loadstore / rowwise /
+        # vector_registers. The cores share the per-instance AXI bus to DRAM
+        # via a gearbox FIFO (one DDR<->kernel pair per AXI instance, not BS).
         for c in range(bs):
             ternip_id = f"ternip_core_i{i}_c{c}"
             moa_id = f"moa_i{i}_c{c}"
@@ -208,79 +290,58 @@ def _build_NumSeparateAxiInstances(
                 node_type="vector_registers", params=params, bank=i, core=c,
             ))
 
-            # instruction broadcast to this core
+            # Instruction dispatch into this core. Crosses SLR via
+            # ternip_buffered's pipelined_interconnect (CoreInterconnectNumStages).
             edges.append(_make_edge(
                 idc_id, ternip_id, iw,
                 "InstructionWidth (decoded -> core)",
+                pipeline_stages=pipe_stages,
             ))
 
-            # tmatmul_dma broadcast to this core's MOA
+            # tmatmul_dma -> this core's MOA (ternary stream)
             edges.append(_make_edge(
                 tmd_id, moa_id, tp * 2,
-                "TmatmulParallelism * 2 (ternary stream, broadcast)",
-            ))
-            edges.append(_make_edge(
-                moa_id, ternip_id, fxp * tp,
-                "FixedPointPrecision * TmatmulParallelism (MOA result)",
+                "TmatmulParallelism * 2 (ternary stream from DDR)",
             ))
 
-            # IV/EV wide buses to/from MOA
+            # IV -> MOA (wide activation = ImportVectorRowWidth * FxP)
             edges.append(_make_edge(
-                iv_id, moa_id, tp * fxp,
-                "TmatmulParallelism * FixedPointPrecision (wide activation)",
-            ))
-            edges.append(_make_edge(
-                moa_id, ev_id, tp * fxp,
-                "TmatmulParallelism * FixedPointPrecision (wide accumulator out)",
+                iv_id, moa_id, iv_to_moa_bits,
+                f"min(TP,D) * FixedPointPrecision = {ivr} * {fxp} "
+                f"(wide activation)",
             ))
 
-            # Loadstore connects to this instance's DRAM bank
+            # MOA -> EV (reduced output)
             edges.append(_make_edge(
-                ls_id, dram_id, dw,
-                "DdrDataWidth (loadstore W-channel)",
-            ))
-            edges.append(_make_edge(
-                dram_id, ls_id, dw,
-                "DdrDataWidth (loadstore R-channel)",
+                moa_id, ev_id, moa_out_bits,
+                "RowParallelism * FixedPointPrecision "
+                "(MOA reduces ImportVectorRowWidth ternary operands "
+                "to RowParallelism scalars)",
             ))
 
-            # Core <-> shared per-core functional units
-            edges.append(_make_edge(
-                ternip_id, rms_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
-            ))
-            edges.append(_make_edge(
-                ternip_id, ls_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
-            ))
-            edges.append(_make_edge(
-                ternip_id, rw_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
-            ))
-            edges.append(_make_edge(
-                ternip_id, vr_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
-            ))
-            edges.append(_make_edge(
-                vr_id, iv_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
-            ))
-            edges.append(_make_edge(
-                ev_id, vr_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
-            ))
+            # Vector registers <-> all FUs (single shared port in RTL,
+            # rendered as direct VR<->FU edges).
+            _add_vr_fu_edges(
+                edges, vr_id, rms_id, ls_id, rw_id, [iv_id], [ev_id], vp, fxp,
+            )
 
-    # XRT shell — single platform-side node; every per-instance decoder
-    # receives its instruction stream from here.
-    nodes.append(_make_node(
-        node_id="xrt_shell", label="XRT shell",
-        node_type="xrt_shell", params=params,
-    ))
-    for i in range(n):
-        edges.append(_make_edge(
-            "xrt_shell", f"instruction_decode_i{i}", iw,
-            "InstrFetchWidth (instructions from host via XRT)",
-        ))
+        # ONE shared loadstore<->DRAM edge per AXI instance (not BS edges).
+        # The BS cores route through gbfifo_loadstore to share the AXI bus.
+        # Represent this with edges from the first core's loadstore; the
+        # other BS-1 cores share that path via the gearbox (modeled as
+        # cell mass on the loadstore node, not as separate edges).
+        if bs > 0:
+            ls0_id = f"loadstore_i{i}_c0"
+            edges.append(_make_edge(
+                ls0_id, dram_id, dw,
+                "DdrDataWidth (loadstore W-channel; "
+                "shared across BS cores via gearbox)",
+            ))
+            edges.append(_make_edge(
+                dram_id, ls0_id, dw,
+                "DdrDataWidth (loadstore R-channel; "
+                "shared across BS cores via gearbox)",
+            ))
 
     return nodes, edges
 
@@ -292,6 +353,10 @@ def _build_NumSeparateAxiInstances(
 def _build_NumDdrBanksPerTmatmul(
     params: ParamsDict,
 ) -> tuple[list[Node], list[Edge]]:
+    """One kernel, one tmatmul module fed by N DDR banks. Per RTL
+    (ternip_tmatmul.sv bank_lane[b]), the tmatmul instantiates N MOAs and
+    N exportvectors (one per bank) but a SINGLE shared full-D-wide
+    importvector. BatchSize replicates the entire ternip_core."""
     n = int(params["NumDdrBanksUsed"])
     if n < 1:
         raise ValueError("NumDdrBanksUsed must be >= 1")
@@ -300,12 +365,29 @@ def _build_NumDdrBanksPerTmatmul(
     vp = int(params["VectorParallelism"])
     fxp = int(params["FixedPointPrecision"])
     iw = int(params["InstructionWidth"])
+    ifw = int(params.get("InstrFetchWidth", 32))
     dw = int(params["DdrDataWidth"])
+    d = int(params["D"])
+    pipe_stages = int(params.get("CoreInterconnectNumStages", 8))
+
+    # Single tmatmul, full D-wide IV; per-bank MOAs each see TP/N of the
+    # ternary stream and ImportVectorRowWidth = min(TP, D) of the activation.
+    ivl = d
+    ivr = min(tp, ivl)
+    row_parallelism = max(1, tp // ivl)
+    moa_out_bits = row_parallelism * fxp
+    iv_to_moa_bits = ivr * fxp
 
     nodes: list[Node] = []
     edges: list[Edge] = []
 
     _add_dram_banks(nodes, params, n)
+
+    # XRT shell + AXI-Lite control bundle.
+    nodes.append(_make_node(
+        node_id="xrt_shell", label="XRT shell",
+        node_type="xrt_shell", params=params,
+    ))
 
     # Shared (single-instance) infrastructure
     nodes.append(_make_node(
@@ -317,7 +399,23 @@ def _build_NumDdrBanksPerTmatmul(
         node_type="instruction_decode", params=params,
     ))
 
-    # Per-bank tmatmul_dma (shared across all BS cores; broadcast)
+    # Instruction path: DRAM[0] -> axi_dma_instr (DDR DMA reads) ->
+    # instruction_decode (InstrFetchWidth AXIS surface).
+    edges.append(_make_edge(
+        "dram_b0", "axi_dma_instr", dw,
+        "DdrDataWidth (instruction DMA reads from DRAM)",
+    ))
+    edges.append(_make_edge(
+        "axi_dma_instr", "instruction_decode", ifw,
+        "InstrFetchWidth (AXIS instruction stream)",
+    ))
+    edges.append(_make_edge(
+        "xrt_shell", "axi_dma_instr", _AXI_LITE_WIDTH,
+        "AXI-Lite control (bundled: stall, rst, debug, dma_lite)",
+    ))
+
+    # Per-bank tmatmul_dma — one per DDR bank, broadcasts a 1/N slice of
+    # the ternary stream to every core's per-bank MOA.
     for b in range(n):
         tmd_id = f"tmatmul_dma_b{b}"
         nodes.append(_make_node(
@@ -326,23 +424,17 @@ def _build_NumDdrBanksPerTmatmul(
         ))
         edges.append(_make_edge(
             f"dram_b{b}", tmd_id, dw,
-            "DdrDataWidth (R-channel)",
+            "DdrDataWidth (R-channel ternary weights)",
         ))
 
-    # Instruction-fetcher edges
-    edges.append(_make_edge(
-        "axi_dma_instr", "instruction_decode", iw,
-        "InstructionWidth (AXI DMA -> decoder)",
-    ))
-
-    # Per-core hardware — BatchSize copies. Each core has its OWN
-    # MOA / IV / EV / RMS / loadstore / rowwise / vector_registers / tmatmul_unit.
-    # All N tmatmul_dma streams broadcast to every core's MOA.
+    # Per-core hardware — BatchSize copies. Per RTL, each tmatmul has:
+    #   - 1 shared importvector (full-D-wide)
+    #   - N MOAs (bank_lane[b].multioperand_accumulator)
+    #   - N exportvectors (bank_lane[b].exportvector)
+    #   - 1 each of RMS / loadstore / rowwise_op / vector_registers
     for c in range(bs):
         ternip_id = f"ternip_core_c{c}"
-        moa_id = f"moa_c{c}"
         iv_id = f"importvector_c{c}"
-        ev_id = f"exportvector_c{c}"
         rms_id = f"rms_c{c}"
         ls_id = f"loadstore_c{c}"
         rw_id = f"rowwise_op_c{c}"
@@ -353,16 +445,8 @@ def _build_NumDdrBanksPerTmatmul(
             node_type="ternip_core", params=params, core=c,
         ))
         nodes.append(_make_node(
-            node_id=moa_id, label=f"MOA[{c}]",
-            node_type="MOA", params=params, core=c,
-        ))
-        nodes.append(_make_node(
             node_id=iv_id, label=f"importvector[{c}]",
             node_type="importvector", params=params, core=c,
-        ))
-        nodes.append(_make_node(
-            node_id=ev_id, label=f"exportvector[{c}]",
-            node_type="exportvector", params=params, core=c,
         ))
         nodes.append(_make_node(
             node_id=rms_id, label=f"RMS[{c}]",
@@ -381,78 +465,69 @@ def _build_NumDdrBanksPerTmatmul(
             node_type="vector_registers", params=params, core=c,
         ))
 
-        # All N tmatmul_dma streams broadcast to this core's MOA
+        # N per-bank MOAs and N per-bank exportvectors in this core.
+        ev_ids: list[str] = []
         for b in range(n):
-            edges.append(_make_edge(
-                f"tmatmul_dma_b{b}", moa_id, tp * 2,
-                "TmatmulParallelism * 2 (ternary stream, broadcast)",
+            moa_id = f"moa_c{c}_b{b}"
+            ev_id = f"exportvector_c{c}_b{b}"
+            ev_ids.append(ev_id)
+
+            nodes.append(_make_node(
+                node_id=moa_id, label=f"MOA[{c}][bank{b}]",
+                node_type="MOA", params=params, bank=b, core=c,
+            ))
+            nodes.append(_make_node(
+                node_id=ev_id, label=f"exportvector[{c}][bank{b}]",
+                node_type="exportvector", params=params, bank=b, core=c,
             ))
 
-        # instruction broadcast to this core
+            # tmatmul_dma[b] -> this core's per-bank MOA[c][b]
+            edges.append(_make_edge(
+                f"tmatmul_dma_b{b}", moa_id, tp * 2,
+                "TmatmulParallelism * 2 (ternary stream, "
+                "per-bank 1/N slice of TP)",
+            ))
+
+            # IV is shared across all N MOAs in this core; each MOA reads
+            # its slice from the same IV port.
+            edges.append(_make_edge(
+                iv_id, moa_id, iv_to_moa_bits,
+                f"min(TP,D) * FixedPointPrecision = {ivr} * {fxp} "
+                f"(wide activation, shared from IV)",
+            ))
+
+            # MOA -> EV (reduced output, per bank lane)
+            edges.append(_make_edge(
+                moa_id, ev_id, moa_out_bits,
+                "RowParallelism * FixedPointPrecision "
+                "(MOA reduces ImportVectorRowWidth operands)",
+            ))
+
+        # Instruction dispatch into this core (crosses SLR boundary via
+        # ternip_buffered's pipelined_interconnect).
         edges.append(_make_edge(
             "instruction_decode", ternip_id, iw,
             "InstructionWidth (decoded -> core)",
+            pipeline_stages=pipe_stages,
         ))
 
-        # MOA <-> core
-        edges.append(_make_edge(
-            moa_id, ternip_id, fxp * tp,
-            "FixedPointPrecision * TmatmulParallelism (MOA result)",
-        ))
-        edges.append(_make_edge(
-            iv_id, moa_id, tp * fxp,
-            "TmatmulParallelism * FixedPointPrecision (wide activation)",
-        ))
-        edges.append(_make_edge(
-            moa_id, ev_id, tp * fxp,
-            "TmatmulParallelism * FixedPointPrecision (wide accumulator out)",
-        ))
+        # Vector registers <-> all FUs.
+        _add_vr_fu_edges(
+            edges, vr_id, rms_id, ls_id, rw_id, [iv_id], ev_ids, vp, fxp,
+        )
 
-        # Loadstore connects to DRAM[0] (convention — single m_axi_loadstore)
+    # One shared loadstore<->DRAM[0] pair per kernel (BS cores share the AXI
+    # bus through gbfifo_loadstore).
+    if bs > 0:
+        ls0_id = f"loadstore_c0"
         edges.append(_make_edge(
-            ls_id, "dram_b0", dw,
-            "DdrDataWidth (loadstore W-channel)",
+            ls0_id, "dram_b0", dw,
+            "DdrDataWidth (loadstore W-channel; shared across BS cores)",
         ))
         edges.append(_make_edge(
-            "dram_b0", ls_id, dw,
-            "DdrDataWidth (loadstore R-channel)",
+            "dram_b0", ls0_id, dw,
+            "DdrDataWidth (loadstore R-channel; shared across BS cores)",
         ))
-
-        # Core <-> shared per-core functional units
-        edges.append(_make_edge(
-            ternip_id, rms_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            ternip_id, ls_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            ternip_id, rw_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            ternip_id, vr_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            vr_id, iv_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            ev_id, vr_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-
-    # XRT shell — single platform-side node that delivers instructions.
-    nodes.append(_make_node(
-        node_id="xrt_shell", label="XRT shell",
-        node_type="xrt_shell", params=params,
-    ))
-    edges.append(_make_edge(
-        "xrt_shell", "instruction_decode", iw,
-        "InstrFetchWidth (instructions from host via XRT)",
-    ))
 
     return nodes, edges
 
@@ -464,6 +539,11 @@ def _build_NumDdrBanksPerTmatmul(
 def _build_NumTmatmulBanksPerCore(
     params: ParamsDict,
 ) -> tuple[list[Node], list[Edge]]:
+    """Column-slice variant: N tmatmul_units per core, each handling D/N
+    of the inner dimension. Per ternip_batched.sv (core_tmatmul_ddr_r_data_i
+    [i][u] = tmatmul_ddr_r_data_i[u]), bank b feeds unit b 1-to-1 within
+    each core, and bank b feeds the SAME unit-index across all BS cores
+    (broadcast across cores, NOT across units within a core)."""
     n = int(params["NumDdrBanksUsed"])
     if n < 1:
         raise ValueError("NumDdrBanksUsed must be >= 1")
@@ -478,12 +558,28 @@ def _build_NumTmatmulBanksPerCore(
     vp = int(params["VectorParallelism"])
     fxp = int(params["FixedPointPrecision"])
     iw = int(params["InstructionWidth"])
+    ifw = int(params.get("InstrFetchWidth", 32))
     dw = int(params["DdrDataWidth"])
+    pipe_stages = int(params.get("CoreInterconnectNumStages", 8))
+
+    # Column-slice: N tmatmul UNITS per core, each with ImportVectorLength = D/N.
+    # RowParallelism = max(1, TP / (D/N)).
+    ivl_per_unit = d // n
+    ivr_per_unit = min(tp, ivl_per_unit) if ivl_per_unit else tp
+    row_parallelism = max(1, tp // ivl_per_unit) if ivl_per_unit else 1
+    moa_out_bits = row_parallelism * fxp
+    iv_to_moa_bits = ivr_per_unit * fxp
 
     nodes: list[Node] = []
     edges: list[Edge] = []
 
     _add_dram_banks(nodes, params, n)
+
+    # XRT shell + AXI-Lite control.
+    nodes.append(_make_node(
+        node_id="xrt_shell", label="XRT shell",
+        node_type="xrt_shell", params=params,
+    ))
 
     # Shared (across all BS cores)
     nodes.append(_make_node(
@@ -495,8 +591,23 @@ def _build_NumTmatmulBanksPerCore(
         node_type="instruction_decode", params=params,
     ))
 
-    # tmatmul_dma stays singular per bank — its R-channel is broadcast to
-    # all cores' tmatmul_units.
+    # Instruction path: DRAM[0] -> axi_dma_instr -> instruction_decode.
+    edges.append(_make_edge(
+        "dram_b0", "axi_dma_instr", dw,
+        "DdrDataWidth (instruction DMA reads from DRAM)",
+    ))
+    edges.append(_make_edge(
+        "axi_dma_instr", "instruction_decode", ifw,
+        "InstrFetchWidth (AXIS instruction stream)",
+    ))
+    edges.append(_make_edge(
+        "xrt_shell", "axi_dma_instr", _AXI_LITE_WIDTH,
+        "AXI-Lite control (bundled: stall, rst, debug, dma_lite)",
+    ))
+
+    # tmatmul_dma stays singular per bank — its R-channel feeds the
+    # u==b indexed tmatmul_unit in EACH of the BS cores (broadcast across
+    # cores, 1-to-1 within a core).
     for b in range(n):
         tmd_id = f"tmatmul_dma_b{b}"
         nodes.append(_make_node(
@@ -505,7 +616,7 @@ def _build_NumTmatmulBanksPerCore(
         ))
         edges.append(_make_edge(
             f"dram_b{b}", tmd_id, dw,
-            "DdrDataWidth (R-channel)",
+            "DdrDataWidth (R-channel ternary weights)",
         ))
 
     # Per-core replication: BS cores, each with N tmatmul_units etc.
@@ -537,46 +648,23 @@ def _build_NumTmatmulBanksPerCore(
             node_type="vector_registers", params=params, core=c,
         ))
 
-        # Loadstore is per-core, talks to DRAM[0] by convention.
-        edges.append(_make_edge(
-            ls_id, "dram_b0", dw,
-            "DdrDataWidth (loadstore W-channel)",
-        ))
-        edges.append(_make_edge(
-            "dram_b0", ls_id, dw,
-            "DdrDataWidth (loadstore R-channel)",
-        ))
-
-        # instruction_decode -> this core
+        # instruction_decode -> this core (SLR-crossing pipeline)
         edges.append(_make_edge(
             "instruction_decode", ternip_id, iw,
             "InstructionWidth (decoded -> core)",
+            pipeline_stages=pipe_stages,
         ))
 
-        # Shared FUs (within the core)
-        edges.append(_make_edge(
-            ternip_id, rms_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            ternip_id, ls_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            ternip_id, rw_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-        edges.append(_make_edge(
-            ternip_id, vr_id, vp * fxp,
-            "VectorParallelism * FixedPointPrecision",
-        ))
-
-        # N tmatmul_units per core, each containing its own MOA/IV/EV.
+        # N tmatmul_units per core, each containing its own MOA / IV / EV.
+        iv_ids: list[str] = []
+        ev_ids: list[str] = []
         for u in range(n):
             unit_id = f"tmatmul_unit_c{c}_u{u}"
             moa_id = f"moa_c{c}_u{u}"
             iv_id = f"importvector_c{c}_u{u}"
             ev_id = f"exportvector_c{c}_u{u}"
+            iv_ids.append(iv_id)
+            ev_ids.append(ev_id)
 
             nodes.append(_make_node(
                 node_id=unit_id, label=f"tmatmul_unit[{u}] (core {c})",
@@ -595,61 +683,47 @@ def _build_NumTmatmulBanksPerCore(
                 node_type="exportvector", params=params, bank=u, core=c,
             ))
 
-            # Broadcast: each tmatmul_dma[b] feeds every tmatmul_unit[u]
-            # across all cores. Per user spec, the bank<->unit mapping
-            # itself is full broadcast.
-            for b in range(n):
-                edges.append(_make_edge(
-                    f"tmatmul_dma_b{b}", unit_id, tp * 2,
-                    "TmatmulParallelism * 2 (ternary stream, broadcast)",
-                ))
-
-            # Sub-edges within the tmatmul_unit — wide ternary buses
+            # 1-to-1 within a core: tmatmul_dma[u] -> tmatmul_unit[u].
+            # (Broadcast across the BS cores comes for free at BS>1: each
+            # core's unit-u draws from the same tmatmul_dma_b{u}.)
             edges.append(_make_edge(
-                iv_id, moa_id, tp * fxp,
-                "TmatmulParallelism * FixedPointPrecision (wide activation)",
-            ))
-            edges.append(_make_edge(
-                moa_id, ev_id, tp * fxp,
-                "TmatmulParallelism * FixedPointPrecision (wide accumulator out)",
-            ))
-            edges.append(_make_edge(
-                moa_id, unit_id, fxp * tp,
-                "FixedPointPrecision * TmatmulParallelism (MOA result)",
+                f"tmatmul_dma_b{u}", unit_id, tp * 2,
+                "TmatmulParallelism * 2 (ternary stream, 1-to-1 "
+                "bank-to-unit; broadcast across BS cores)",
             ))
 
-            # vector_registers <-> import/export
+            # Wide activation: IV -> MOA. Per-unit IV is D/N wide.
             edges.append(_make_edge(
-                vr_id, iv_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
-            ))
-            edges.append(_make_edge(
-                ev_id, vr_id, vp * fxp,
-                "VectorParallelism * FixedPointPrecision",
+                iv_id, moa_id, iv_to_moa_bits,
+                f"min(TP, D/N) * FixedPointPrecision = "
+                f"{ivr_per_unit} * {fxp} (wide activation, per-unit slice)",
             ))
 
-            # tmatmul_unit -> core
+            # MOA -> EV (reduced output)
             edges.append(_make_edge(
-                unit_id, ternip_id, fxp * tp,
-                "FixedPointPrecision * TmatmulParallelism (unit result)",
+                moa_id, ev_id, moa_out_bits,
+                "RowParallelism * FixedPointPrecision "
+                "(MOA reduces ImportVectorRowWidth operands)",
             ))
 
-    # Instruction fetcher
-    edges.append(_make_edge(
-        "axi_dma_instr", "instruction_decode", iw,
-        "InstructionWidth (AXI DMA -> decoder)",
-    ))
+        # Vector registers <-> all FUs (single shared port, N IVs + N EVs
+        # OR-muxed in addition to RMS/loadstore/rowwise).
+        _add_vr_fu_edges(
+            edges, vr_id, rms_id, ls_id, rw_id, iv_ids, ev_ids, vp, fxp,
+        )
 
-    # XRT shell — single platform-side node that delivers instructions to
-    # the decoder. axi_dma_instr remains as the kernel-side DMA bridge.
-    nodes.append(_make_node(
-        node_id="xrt_shell", label="XRT shell",
-        node_type="xrt_shell", params=params,
-    ))
-    edges.append(_make_edge(
-        "xrt_shell", "instruction_decode", iw,
-        "InstrFetchWidth (instructions from host via XRT)",
-    ))
+    # ONE shared loadstore<->DRAM[0] pair per kernel (BS cores share the
+    # AXI bus through gbfifo_loadstore).
+    if bs > 0:
+        ls0_id = f"loadstore_c0"
+        edges.append(_make_edge(
+            ls0_id, "dram_b0", dw,
+            "DdrDataWidth (loadstore W-channel; shared across BS cores)",
+        ))
+        edges.append(_make_edge(
+            "dram_b0", ls0_id, dw,
+            "DdrDataWidth (loadstore R-channel; shared across BS cores)",
+        ))
 
     return nodes, edges
 

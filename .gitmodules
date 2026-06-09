@@ -41,3 +41,12 @@
 [submodule "references/RapidWright"]
 	path = references/RapidWright
 	url = org-3189299@github.com:Xilinx/RapidWright.git
+[submodule "architecture_visualizer/architectures/NumSeparateAxiInstances"]
+	path = architecture_visualizer/architectures/NumSeparateAxiInstances
+	url = git@github.com:sifferman/ternary_matmul_claude.git
+[submodule "architecture_visualizer/architectures/NumDdrBanksPerTmatmul"]
+	path = architecture_visualizer/architectures/NumDdrBanksPerTmatmul
+	url = git@github.com:sifferman/ternary_matmul_claude.git
+[submodule "architecture_visualizer/architectures/NumTmatmulBanksPerCore"]
+	path = architecture_visualizer/architectures/NumTmatmulBanksPerCore
+	url = git@github.com:sifferman/ternary_matmul_claude.git

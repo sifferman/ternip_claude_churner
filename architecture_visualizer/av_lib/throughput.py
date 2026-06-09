@@ -1,147 +1,158 @@
-"""Throughput math — re-implementation of report_instruction_timing.py.
+"""Throughput math — variant-dispatched subprocess of report_instruction_timing.py.
 
-See ``lib/api.py`` for the contract.
+Each architecture variant has its own ``sw_utils/target/report_instruction_timing.py``
+under ``architectures/<variant>/``. The script's Config class differs across
+variants (NumSeparateAxiInstances vs NumDdrBanksPerTmatmul vs
+NumTmatmulBanksPerCore branches), and only the newest branch has
+``Config.from_dict``. To keep the visualizer variant-correct without
+patching the older submodules, we generate a temp ``.svh`` from the slider
+values and subprocess each variant's own script.
 
-Pure in-process Python — no subprocess. The function is driven from a
-dict of parameter values (as produced by the visualizer's sliders) so
-the caller does not need a ``.svh`` file on disk.
-
-Implementation notes
---------------------
-* The ``report_instruction_timing.py`` script builds an
-  ``AlgorithmTree`` for the model, schedules it via
-  ``create_instruction_ordering`` /  ``create_register_mapping`` /
-  ``prune_unnecessary_swaps`` / ``create_assembly_tokens``, and then
-  runs the per-operation timing accumulator inside
-  ``AlgorithmTree.report_timing``.  We re-use the
-  ``ternary_matmul/sw_utils`` library for the algorithm build + the
-  schedule — re-porting those thousands of lines would be brittle —
-  but we re-implement the final ``report_timing`` accumulator inline
-  (without ``print`` statements) so we can return numerical values.
-* The original ``report_timing`` prints ``singlecore`` /
-  ``multicore`` lines; the math in those two lines is
-  ``clk_freq / cycle_counter`` and
-  ``NumTmatmulBanksPerCore * BatchSize * singlecore`` respectively.
-
-OWNED BY: Phase 1 Agent C (Throughput + Config Refactor).
+Subprocess cost is ~1-2s per "Compute tokens/sec" click — acceptable for
+an on-demand button.
 """
 from __future__ import annotations
 
-import contextlib
-import io
-import os
-import sys
+import re
+import subprocess
+import tempfile
 from pathlib import Path
 
-from .api import ThroughputResult
+from .api import ArchVariant, ThroughputResult
 
 
-# ---------------------------------------------------------------------------
-# sw_utils path setup
-# ---------------------------------------------------------------------------
-# The sw_utils library modules import each other as ``from lib.X import Y``
-# (no ``sw_utils`` package prefix), so we have to insert
-# ``ternary_matmul/sw_utils`` onto ``sys.path`` before importing them.
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
-_SW_UTILS_DIR = _REPO_ROOT / "ternary_matmul" / "sw_utils"
-if str(_SW_UTILS_DIR) not in sys.path:
-    sys.path.insert(0, str(_SW_UTILS_DIR))
+# architecture_visualizer/av_lib/throughput.py -> architecture_visualizer/
+_PKG_ROOT = Path(__file__).resolve().parent.parent
+_ARCHITECTURES_DIR = _PKG_ROOT / "architectures"
 
 
-def _operation_duration(tree, operation, parallel=False):
-    """Delegate to AlgorithmTree.operation_duration; kept as a thin wrapper
-    so the report-timing port below reads close to the original."""
-    return tree.operation_duration(operation, parallel=parallel)
+# Variant -> .svh field name that holds the N-replication factor.
+_VARIANT_N_PARAM = {
+    "NumSeparateAxiInstances":   "NumSeparateAxiInstances",
+    "NumDdrBanksPerTmatmul":     "NumDdrBanksPerTmatmul",
+    "NumTmatmulBanksPerCore":    "NumTmatmulBanksPerCore",
+}
 
 
-def _report_timing_numerical(tree, assembly_tokens):
-    """Port of ``AlgorithmTree.report_timing`` without the ``print`` calls.
+def _render_svh(config: dict, variant: ArchVariant) -> str:
+    """Render a config dict as a minimal .svh file the report script can parse."""
+    n = int(config["NumDdrBanksUsed"])
+    variant_n_field = _VARIANT_N_PARAM[variant]
+    lines = [
+        f'localparam string Part = "{config.get("Part", "xcu250-figd2104-2L-e")}";',
+        "",
+        f'localparam int D = {int(config["D"])};',
+        f'localparam int TmatmulParallelism = {int(config["TmatmulParallelism"])};',
+        f'localparam int VectorParallelism = {int(config["VectorParallelism"])};',
+        f'localparam int LutParallelism = {int(config.get("LutParallelism", 1))};',
+        "",
+        f'localparam int FixedPointPrecision = {int(config["FixedPointPrecision"])};',
+        f'localparam int FixedPointExponent = {int(config.get("FixedPointExponent", -5))};',
+        "",
+        "parameter mul_impl_e MultiplicationImplementation = MUL_STAR;",
+        "parameter div_impl_e DivisionImplementation = DIV_BSG;",
+        "",
+        f'localparam bit UseHardSigmoid = 1;',
+        "",
+        f'localparam int BatchSize = {int(config["BatchSize"])};',
+        "",
+        f'localparam int NumVectorRegisters = {int(config.get("NumVectorRegisters", 4))};',
+        f'localparam int ImmediateWidth = {int(config.get("ImmediateWidth", 16))};',
+        f'localparam int DdrAddressWidth = {int(config.get("DdrAddressWidth", 64))};',
+        f'localparam int InstructionWidth = {int(config["InstructionWidth"])};',
+        "",
+        f'localparam int DdrDataWidth = {int(config["DdrDataWidth"])};',
+        f'localparam int InstrFetchWidth = {int(config.get("InstrFetchWidth", 32))};',
+        f'localparam int {variant_n_field} = {n};',
+        f'localparam int CoreInterconnectNumStages = '
+        f'{int(config.get("CoreInterconnectNumStages", 8))};',
+        "",
+        "localparam real ClockPeriod = 3.333 * 10.0**-9; // 300MHz",
+        "",
+        "localparam real DramMaxBytesPerSecond = 8 * 2400.0 * 10**6;",
+        f'localparam int DramNumBanks = {int(config.get("DramNumBanks", 4))};',
+        "",
+    ]
+    return "\n".join(lines)
 
-    Returns ``(singlecore, multicore, clk_freq_mhz)`` floats. Mirrors the
-    cycle-accumulator logic in
-    ``ternary_matmul/sw_utils/lib/algorithm_tree.py:report_timing``.
-    """
-    cycle_counter = 0
-    tmatmul_go_cycle_counter = 0
-    tmatmul_export_stalled_cycle_counter = 0
-    time_since_last_tmatmul_go = float("inf")
 
-    for instruction_tokens in assembly_tokens:
-        operation_name = instruction_tokens[0]
-        operation_delay = _operation_duration(tree, operation_name, parallel=True)
-
-        if operation_name == "tmatmul_export":
-            time_remaining_on_tmatmul_go = (
-                _operation_duration(tree, "tmatmul_go", parallel=False)
-                - time_since_last_tmatmul_go
-            )
-            if time_remaining_on_tmatmul_go > 0:
-                tmatmul_export_stalled_cycle_counter += time_remaining_on_tmatmul_go
-                operation_delay += time_remaining_on_tmatmul_go
-        elif operation_name == "tmatmul_go":
-            tmatmul_go_cycle_counter += _operation_duration(
-                tree, "tmatmul_go", parallel=False
-            )
-            time_since_last_tmatmul_go = 0
-
-        cycle_counter += operation_delay
-        time_since_last_tmatmul_go += operation_delay
-
-    clk_freq = 1.0 / tree.config.ClockPeriod
-    singlecore = clk_freq / cycle_counter
-    multicore = (
-        tree.config.NumTmatmulBanksPerCore * tree.config.BatchSize * singlecore
-    )
-    clk_freq_mhz = clk_freq / 10**6
-    return float(singlecore), float(multicore), float(clk_freq_mhz)
+_SINGLECORE_RE = re.compile(
+    r"^\s*singlecore\s+tokens_per_second\s+at\s+([\d.]+)\s*MHz\s*=\s*([\d.eE+-]+)"
+)
+_MULTICORE_RE = re.compile(
+    r"^\s*multicore\s+tokens_per_second\s+at\s+([\d.]+)\s*MHz\s*=\s*([\d.eE+-]+)"
+)
 
 
 def compute_tokens_per_sec(
     config: dict,
     model: str = "MMfreeLM-370M",
+    variant: ArchVariant = "NumTmatmulBanksPerCore",
 ) -> ThroughputResult:
-    """Estimate tokens/sec for the given config + model.
+    """Estimate tokens/sec for the given config + model + architecture variant.
 
-    ``config`` is the dict form accepted by ``Config.from_dict`` —
-    a superset of the visualizer's ``ParamsDict``. Required keys are
-    documented on ``Config.from_dict``.
+    Writes a temp .svh from ``config``, then subprocesses
+    ``architectures/<variant>/sw_utils/target/report_instruction_timing.py``
+    against that file and parses its stdout for the singlecore/multicore
+    tokens-per-second lines.
 
-    Returns a dict with keys ``singlecore``, ``multicore``, and
-    ``clk_freq_mhz`` (per the API contract).
+    The variant's own throughput math is used — each branch has its own
+    AlgorithmTree, so the result is variant-correct.
     """
-    # Imports are deferred so the sys.path manipulation at module top
-    # has had a chance to take effect.
-    from lib.config import Config  # type: ignore[import-not-found]
-    from lib.huggingface import HuggingFace  # type: ignore[import-not-found]
-    from lib.matmulfree_algorithm_tree import (  # type: ignore[import-not-found]
-        matmulfree_algorithm_tree,
-    )
+    if variant not in _VARIANT_N_PARAM:
+        raise ValueError(f"unknown variant: {variant!r}")
 
-    cfg = Config.from_dict(config)
+    variant_dir = _ARCHITECTURES_DIR / variant
+    sw_utils_dir = variant_dir / "sw_utils"
+    script = sw_utils_dir / "target" / "report_instruction_timing.py"
+    if not script.exists():
+        raise FileNotFoundError(f"report_instruction_timing.py not found: {script}")
 
-    # Use the same on-disk huggingface_cache dir the original script uses
-    # (relative to ternary_matmul/sw_utils/target). The HuggingFace class
-    # downloads on demand if cache is missing.
-    cache_dir = str(_SW_UTILS_DIR / "target" / "huggingface_cache")
-    # Run cwd-independent: HuggingFace resolves the cache relative to cwd
-    # unless given an absolute path — pass absolute.
-    hf = HuggingFace(model, huggingface_dir=cache_dir)
+    svh_text = _render_svh(config, variant)
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".svh", delete=False, encoding="utf-8"
+    ) as fp:
+        fp.write(svh_text)
+        svh_path = fp.name
 
-    # Silence the unconditional "Scheduled N / M" prints inside
-    # AlgorithmTree.create_instruction_ordering — they're useful for the
-    # CLI script but noise from a Dash callback.
-    with contextlib.redirect_stdout(io.StringIO()):
-        tree = matmulfree_algorithm_tree(cfg, hf, debug=True)
-        ordering = tree.create_instruction_ordering()
-        register_mapping = tree.create_register_mapping(ordering)
-        ordering, register_mapping = tree.prune_unnecessary_swaps(
-            ordering, register_mapping
+    try:
+        proc = subprocess.run(
+            ["python3", str(script), svh_path, model],
+            cwd=str(sw_utils_dir / "target"),
+            env={"PYTHONPATH": str(sw_utils_dir), "PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            timeout=120,
         )
-        assembly_tokens = tree.create_assembly_tokens(ordering, register_mapping)
+    finally:
+        Path(svh_path).unlink(missing_ok=True)
 
-    singlecore, multicore, clk_freq_mhz = _report_timing_numerical(
-        tree, assembly_tokens
-    )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"report_instruction_timing.py exited {proc.returncode}\n"
+            f"--- stderr ---\n{proc.stderr[-2000:]}\n"
+            f"--- stdout (tail) ---\n{proc.stdout[-2000:]}"
+        )
+
+    singlecore = multicore = clk_freq_mhz = None
+    for line in proc.stdout.splitlines():
+        m = _SINGLECORE_RE.match(line)
+        if m:
+            clk_freq_mhz = float(m.group(1))
+            singlecore = float(m.group(2))
+            continue
+        m = _MULTICORE_RE.match(line)
+        if m:
+            clk_freq_mhz = float(m.group(1))
+            multicore = float(m.group(2))
+            continue
+
+    if singlecore is None or multicore is None or clk_freq_mhz is None:
+        raise RuntimeError(
+            "could not parse tokens_per_second from script output:\n"
+            + proc.stdout[-2000:]
+        )
+
     return {
         "singlecore": singlecore,
         "multicore": multicore,

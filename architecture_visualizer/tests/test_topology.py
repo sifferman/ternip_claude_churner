@@ -136,28 +136,37 @@ def test_banks_per_tmatmul_shares_compute():
     params = dict(DEFAULT_PARAMS, NumDdrBanksUsed=4)
     nodes, _ = build_topology("NumDdrBanksPerTmatmul", params)
     n = params["NumDdrBanksUsed"]
-    # N tmatmul_dma but only 1 MOA / IV / EV / RMS / etc.
+    # Per RTL (ternip_tmatmul.sv bank_lane[b]): N tmatmul_dma per kernel, N
+    # MOAs per core (one per bank_lane), N exportvectors per core, but a
+    # SINGLE shared full-D-wide importvector.
     assert sum(1 for x in nodes if x["type"] == "tmatmul_dma") == n
-    assert sum(1 for x in nodes if x["type"] == "MOA") == 1
+    assert sum(1 for x in nodes if x["type"] == "MOA") == n
+    assert sum(1 for x in nodes if x["type"] == "exportvector") == n
     assert sum(1 for x in nodes if x["type"] == "importvector") == 1
-    assert sum(1 for x in nodes if x["type"] == "exportvector") == 1
     assert sum(1 for x in nodes if x["type"] == "RMS") == 1
     assert sum(1 for x in nodes if x["type"] == "loadstore") == 1
     assert sum(1 for x in nodes if x["type"] == "ternip_core") == 1
 
 
-def test_column_slice_broadcasts_dma_to_all_units():
+def test_column_slice_pairs_dma_one_to_one_with_unit():
     params = dict(DEFAULT_PARAMS, NumDdrBanksUsed=4, BatchSize=1)
     nodes, edges = build_topology("NumTmatmulBanksPerCore", params)
     n = params["NumDdrBanksUsed"]
-    # Per spec: each tmatmul_dma[b] feeds every tmatmul_unit[u] in every
-    # core. With BS=1 there are N units => N*N broadcast edges.
+    # Per RTL (ternip_batched.sv `core_tmatmul_ddr_r_data_i[i][u] =
+    # tmatmul_ddr_r_data_i[u]`): bank b feeds unit b within each core
+    # (1-to-1, not N-way broadcast across units). At BS=1 the DMA->unit
+    # edge count is therefore N, not N*N.
     dma_to_unit = [
         e for e in edges
         if e["source"].startswith("tmatmul_dma_b")
         and e["target"].startswith("tmatmul_unit_")
     ]
-    assert len(dma_to_unit) == n * n
+    assert len(dma_to_unit) == n
+    # Each edge must pair the same bank index with the same unit index.
+    for e in dma_to_unit:
+        bank = e["source"].removeprefix("tmatmul_dma_b")
+        unit = e["target"].rsplit("_u", 1)[-1]
+        assert bank == unit, f"Expected bank==unit, got {e}"
 
 
 def test_dram_banks_have_slr_pinning():
