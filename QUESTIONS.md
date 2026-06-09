@@ -9,7 +9,43 @@ considered, and how to redirect if the user wants something different.
 
 ---
 
-_(no open questions)_
+## 2026-06-09 4:14 PM PDT — NSAI_1 failed timing on DDR4 IP paths (not kernel)
+
+### Status
+
+NSAI_1 (2026.06.09-1217) closed with **WNS=-0.248 ns / 191 failing
+endpoints on mmcm_clkout0**. Already a 4× improvement vs NTB's
+WNS=-0.98 ns. But the worst-failing paths are inside the platform's
+DDR4 IP (`memory_subsystem/.../u_ddr_cal/u_ddr_cal_addr_decode/...`
+and `memory_subsystem/.../u_ddr_mc/.../txn_fifo_output_reg`), NOT in
+our kernel logic. The per-instance SLR pblocks displaced the DDR4 IP
+into a slightly tighter placement.
+
+### Decision (NSAI_2)
+
+Bisect: revert `CoreInterconnectNumStages = 4 → 8` only. Keep the
+floorplan + bd.tcl rewire. If WNS stays at ~-0.25 ns, NumStages wasn't
+the cause and the pblocks are squeezing DDR4 — NSAI_3 will loosen
+pblocks (or accept the small platform-side violation via
+`skipTimingCheckAndFrequencyScaling=1`).
+
+### What I would ask the user
+
+- The DDR4 calibration path that's failing (`u_ddr_cal_addr_decode`) is
+  a startup-only calibration path. -0.248 ns slack on a one-shot
+  calibration register-to-register hop is **functionally irrelevant**
+  — calibration runs once at boot and doesn't repeat at 300 MHz. Vivado
+  static timing analysis doesn't know this is a calibration path.
+  Should I just enable `skipTimingCheckAndFrequencyScaling=1` to package
+  the bitstream and rely on the actual silicon behavior?
+- Alternatively: could the user manually tag those calibration paths as
+  `set_false_path` in a TCL hook so Vivado skips them in static
+  analysis?
+
+### Default I went with
+
+Pursue real timing closure via bisect. The `skipTimingCheckAndFrequencyScaling`
+escape hatch stays available for later iterations.
 
 ---
 
