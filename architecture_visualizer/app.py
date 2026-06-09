@@ -287,19 +287,28 @@ _NUM_SLRS = 4  # AU250 has 4 SLRs
 
 def _assign_node_to_slr(n: dict, num_banks: int) -> int:
     """Heuristic SLR assignment for layout purposes:
-       - DRAM[b] / xrt_shell: explicit slr field
-       - tmatmul_dma[b] / tmatmul_buffers[b]: SLR b (bank-affined, mirrors pblock)
-       - Anything with a `core` index: SLR(core_idx % 4) — round-robin so each
-         core (and its per-core children: MOA, IV, EV, RMS, loadstore, ...) lands
-         in the next SLR, rolling over after SLR3.
-       - Anything else: SLR1 (kernel-center default for shared singletons)
+       - DRAM[b] / xrt_shell: explicit slr field.
+       - **Bank-affined nodes** (`bank` is set): SLR(bank). This is the
+         dominant rule -- a node that belongs to a specific DDR bank lives
+         in that bank's SLR, matching the AU250 platform's DDR[b]->SLR[b]
+         pinning and the pre_place_design pblock convention. Applies to:
+           * NSAI: every per-AXI-instance node (i.e. all kernel logic for
+             instance i lives in SLR i, since instance i owns DDR[i]).
+           * NDB: per-bank MOA / exportvector (bank_lane[b]).
+           * NTB: per-unit tmatmul_unit / MOA / IV / EV (unit u lives
+             with tmatmul_dma_b{u} in SLR u).
+       - Per-core-only nodes (`core` set, `bank` None): SLR(core % 4) -
+         round-robin BatchSize replicas across SLRs so they don't all pile
+         up in SLR1.
+       - Otherwise: SLR1 (kernel-center default for shared singletons like
+         axi_dma_instr, instruction_decode).
     """
     if n.get("type") == "xrt_shell":
         return 0  # placed BELOW SLR0; uses no parent in fact
     if n.get("slr") is not None:
         return int(n["slr"])
     b = n.get("bank")
-    if b is not None and n["type"] in ("tmatmul_dma", "tmatmul_buffers"):
+    if b is not None:
         return int(b) % max(num_banks, 1)
     c = n.get("core")
     if c is not None:

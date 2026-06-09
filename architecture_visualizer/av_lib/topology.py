@@ -207,11 +207,11 @@ def _build_NumSeparateAxiInstances(
 
         nodes.append(_make_node(
             node_id=adi_id, label=f"axi_dma_instr[{i}]",
-            node_type="axi_dma_instr", params=params,
+            node_type="axi_dma_instr", params=params, bank=i,
         ))
         nodes.append(_make_node(
             node_id=idc_id, label=f"instruction_decode[{i}]",
-            node_type="instruction_decode", params=params,
+            node_type="instruction_decode", params=params, bank=i,
         ))
         nodes.append(_make_node(
             node_id=tmd_id, label=f"tmatmul_dma[{i}]",
@@ -697,6 +697,15 @@ def _build_NumTmatmulBanksPerCore(
                 f"tmatmul_dma_b{u}", unit_id, tp * 2,
                 "TmatmulParallelism * 2 (ternary stream, 1-to-1 "
                 "bank-to-unit; broadcast across BS cores)",
+            ))
+
+            # Inside the ternip_tmatmul wrapper, the ternary stream drives
+            # the accumulator_operands of the per-row MOA after gbfifo_tmatmul
+            # gating by the unit's FSM.
+            edges.append(_make_edge(
+                unit_id, moa_id, tp * 2,
+                "TmatmulParallelism * 2 (ternary operands "
+                "from gbfifo_tmatmul -> MOA)",
             ))
 
             # Wide activation: IV -> MOA. Per-unit IV is D/N wide.
