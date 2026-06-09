@@ -4,6 +4,27 @@ You are running in `--dangerously-skip-permissions` mode on a self-driving
 FPGA-timing-optimization harness. Your job is to **iterate on the design,
 build it, record results, and try again** — for days, without supervision.
 
+## Variant docs
+
+This repo's `main` branch contains the variant-agnostic iteration
+mechanics described here. The architectural variant being churned at any
+given time has its own variant-specific deltas in a top-level doc:
+
+- **NumSeparateAxiInstances** (current): see
+  [`NumSeparateAxiInstances.md`](NumSeparateAxiInstances.md). Active
+  churn target as of 2026-06-09. RTL on `main` of the `ternary_matmul`
+  fork; N independent kernel instances each pinned to one SLR. No
+  cross-SLR routing inside an instance.
+- **NumTmatmulBanksPerCore** (paused at WNS=-0.98 ns): see
+  [`NumTmatmulBanksPerCore.md`](NumTmatmulBanksPerCore.md). Column-slice
+  variant. Halted because intra-instance SLR-crossing routing pressure
+  bound timing for 13+ iterations.
+- **NumDdrBanksPerTmatmul** (not currently churned): N DDR banks
+  feeding a single tmatmul. No active iteration plan.
+
+When working on a variant, read both this doc (for shared mechanics) and
+the variant-specific doc (for floorplan / config / iteration deltas).
+
 ## What this repo is
 
 - `ternary_matmul/` — private fork of `sifferman/ternary_matmul` on
