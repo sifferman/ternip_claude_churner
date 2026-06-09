@@ -58,78 +58,100 @@ def _est_tmatmul_dma(params: ParamsDict) -> tuple[int, str, str]:
 
 
 def _est_MOA(params: ParamsDict) -> tuple[int, str, str]:
-    # multioperand_accumulator: log2-deep pipelined adder tree.
-    # Width of each stage scales with the accumulator precision.
+    # multioperand_accumulator: log2-deep pipelined adder tree, NEXT_STAGE_FANIN=2.
+    # Audit-grounded: at TP=128 FxP=16 real LUT ~7k. The naive
+    # TP*FxP*log2(TP) = 14k overstates by 2x because the tree's leaf stages
+    # are narrow ternary mults, not full FxP adders.
     tp = int(params.get("TmatmulParallelism", 128))
     fxp = int(params.get("FixedPointPrecision", 16))
     depth = max(_clog2(tp), 1)
-    count = tp * fxp * depth
-    formula = "TmatmulParallelism * FixedPointPrecision * ceil(log2(TmatmulParallelism))"
-    breakdown = f"{tp} * {fxp} * {depth} = {count}"
+    count = tp * fxp * depth // 2
+    formula = "TP * FxP * ceil(log2(TP)) / 2 (tree leaves are narrow)"
+    breakdown = f"{tp} * {fxp} * {depth} / 2 = {count}"
     return count, formula, breakdown
 
 
 def _est_importvector(params: ParamsDict) -> tuple[int, str, str]:
-    # Per-slice FIFO storage (one slice of D / N elements).
+    # ternip_pipelined_mem double-buffered: storage = ImportVectorRowWidth *
+    # FxP * NumEntries (NumEntries typically 2 for double-buffer). The caller
+    # (topology builder) is responsible for passing an effective `D` matching
+    # this node's ImportVectorLength - full D for NSAI/NDB, D/N for NTB per
+    # tmatmul_unit. The /9 reflects the BRAM-as-LUT-equivalent factor (one
+    # RAMB18 ~= 9 LUT-equivalents per stored bit for visualization scaling).
     d = int(params.get("D", 1024))
-    n = max(int(params.get("NumDdrBanksUsed", 4)), 1)
     fxp = int(params.get("FixedPointPrecision", 16))
-    count = (d // n) * fxp * 2
-    formula = "(D / NumDdrBanksUsed) * FixedPointPrecision * 2"
-    breakdown = f"({d} / {n}) * {fxp} * 2 = {count}"
+    count = (d * fxp * 2) // 9
+    formula = "D * FxP * 2 / 9 (LUT-equiv for BRAM double-buffered storage)"
+    breakdown = f"{d} * {fxp} * 2 / 9 = {count}"
     return count, formula, breakdown
 
 
 def _est_exportvector(params: ParamsDict) -> tuple[int, str, str]:
-    # Symmetric with importvector.
+    # ternip_pipelined_mem; NumChunksPerVector = D / VP entries of FxP wide.
+    # Independent of N - per-unit EV in NTB stores RowParallelism * FxP per
+    # cycle * (D/N / RowParallelism) entries which simplifies to D/N * FxP.
+    # Caller passes effective D matching the node (full for NSAI/NDB,
+    # D/N for NTB per-unit).
     d = int(params.get("D", 1024))
-    n = max(int(params.get("NumDdrBanksUsed", 4)), 1)
     fxp = int(params.get("FixedPointPrecision", 16))
-    count = (d // n) * fxp * 2
-    formula = "(D / NumDdrBanksUsed) * FixedPointPrecision * 2"
-    breakdown = f"({d} / {n}) * {fxp} * 2 = {count}"
+    count = (d * fxp * 2) // 9
+    formula = "D * FxP * 2 / 9 (LUT-equiv for BRAM)"
+    breakdown = f"{d} * {fxp} * 2 / 9 = {count}"
     return count, formula, breakdown
 
 
 def _est_tmatmul_unit(params: ParamsDict) -> tuple[int, str, str]:
-    # Combines MOA + importvector + exportvector + state machine glue.
-    moa_count, _, _ = _est_MOA(params)
-    iv_count, _, _ = _est_importvector(params)
-    ev_count, _, _ = _est_exportvector(params)
-    control = 200
-    count = moa_count + iv_count + ev_count + control
-    formula = "MOA + importvector + exportvector + 200 (control)"
-    breakdown = f"{moa_count} + {iv_count} + {ev_count} + {control} = {count}"
+    # The tmatmul_unit wrapper in NumTmatmulBanksPerCore. Its MOA / IV / EV
+    # are rendered as separate child nodes; this node holds only the unit's
+    # state machine + tmatmul_dma-side handshake. Same convention as
+    # ternip_core: glue-only, no children-sum (would double-count).
+    count = 500
+    formula = "~500 (tmatmul_unit FSM + handshake; children counted separately)"
+    breakdown = f"= {count}"
     return count, formula, breakdown
 
 
 def _est_RMS(params: ParamsDict) -> tuple[int, str, str]:
-    # Accumulator + norm multipliers + sqrt LUT.
+    # Audit-grounded: real RMS ~10-15k LUT. Contains a small MOA that sums
+    # the D operands (D-wide accumulator tree), a sqrt LUT, a fixed-point
+    # multiplier and a divider. The D-wide accumulator dominates; the rest
+    # scales with VP for the per-lane normalize.
     d = int(params.get("D", 1024))
+    vp = int(params.get("VectorParallelism", 4))
     fxp = int(params.get("FixedPointPrecision", 16))
-    count = d * fxp * 4
-    formula = "D * FixedPointPrecision * 4"
-    breakdown = f"{d} * {fxp} * 4 = {count}"
+    # D-wide accumulator tree (compressed) + VP-wide per-lane normalize +
+    # fixed-cost sqrt LUT + divider.
+    count = (d * fxp) // 2 + vp * fxp * 16 + 2000
+    formula = "D*FxP/2 + VP*FxP*16 + 2000 (acc tree + per-lane + sqrt/div)"
+    breakdown = (
+        f"{d}*{fxp}/2 + {vp}*{fxp}*16 + 2000 = {count}"
+    )
     return count, formula, breakdown
 
 
 def _est_loadstore(params: ParamsDict) -> tuple[int, str, str]:
-    # Read path + write path between vector registers and DRAM.
-    d = int(params.get("D", 1024))
+    # Audit-grounded: real loadstore ~3k LUT. It's a small FSM moving
+    # vector_chunk_t = VP*FxP chunks between vector_registers and the AXI
+    # bus; the D-wide path is on the DRAM side (handled by gbfifo_loadstore
+    # which is not modeled separately). The visualizer's loadstore node
+    # represents the kernel-side FSM + per-lane control.
+    vp = int(params.get("VectorParallelism", 4))
     fxp = int(params.get("FixedPointPrecision", 16))
-    count = d * fxp * 2
-    formula = "D * FixedPointPrecision * 2"
-    breakdown = f"{d} * {fxp} * 2 = {count}"
+    count = vp * fxp * 16 + 1500
+    formula = "VP*FxP*16 + 1500 (per-lane control + DMA-side FSM)"
+    breakdown = f"{vp}*{fxp}*16 + 1500 = {count}"
     return count, formula, breakdown
 
 
 def _est_rowwise_op(params: ParamsDict) -> tuple[int, str, str]:
-    # Per-lane elementwise arithmetic.
+    # Audit-grounded: real rowwise_op ~5k LUT. Has elementwise mul,
+    # sigmoid/silu LUT (when not UseHardSigmoid), divider. Scales with VP
+    # for per-lane parallel arithmetic.
     vp = int(params.get("VectorParallelism", 4))
     fxp = int(params.get("FixedPointPrecision", 16))
-    count = vp * fxp * 8
-    formula = "VectorParallelism * FixedPointPrecision * 8"
-    breakdown = f"{vp} * {fxp} * 8 = {count}"
+    count = vp * fxp * 64
+    formula = "VP*FxP*64 (per-lane mul + sigmoid LUT + divider)"
+    breakdown = f"{vp}*{fxp}*64 = {count}"
     return count, formula, breakdown
 
 

@@ -198,4 +198,17 @@ def generate_stylesheet(
         },
     })
 
+    # SLR-crossing pipelined edges (CoreInterconnectNumStages > 0).
+    # Rendered dashed with a slightly darker, more saturated color so it's
+    # obvious which buses are pipelined across SLR boundaries.
+    stylesheet.append({
+        "selector": 'edge[pipelined = "yes"]',
+        "style": {
+            "line-style": "dashed",
+            "line-color": "#5a5a8f",
+            "target-arrow-color": "#5a5a8f",
+            "line-dash-pattern": [8, 4],
+        },
+    })
+
     return stylesheet

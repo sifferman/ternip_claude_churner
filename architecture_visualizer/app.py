@@ -451,15 +451,20 @@ def topology_to_cyto_elements(nodes: list[dict], edges: list[dict]) -> list[dict
         elements.append(cyto_node)
 
     for e in edges:
-        elements.append({
-            "data": {
-                "source": e["source"],
-                "target": e["target"],
-                "bus_bits": int(e.get("bus_bits", 1)),
-                "edge_width": _edge_width_px(int(e.get("bus_bits", 1))),
-                "formula": e.get("formula", ""),
-            },
-        })
+        stages = int(e.get("pipeline_stages", 0))
+        data = {
+            "source": e["source"],
+            "target": e["target"],
+            "bus_bits": int(e.get("bus_bits", 1)),
+            "edge_width": _edge_width_px(int(e.get("bus_bits", 1))),
+            "formula": e.get("formula", ""),
+            "pipeline_stages": stages,
+        }
+        # Selector flag so the stylesheet rule for SLR-crossing pipelines
+        # can match without computing a numeric comparison in the rule.
+        if stages > 0:
+            data["pipelined"] = "yes"
+        elements.append({"data": data})
 
     return elements
 
@@ -859,8 +864,10 @@ def update_edge_hover(edge_data):
     formula = edge_data.get("formula", "")
     src = edge_data.get("source", "?")
     dst = edge_data.get("target", "?")
+    stages = int(edge_data.get("pipeline_stages", 0) or 0)
     formula_part = f" = {formula}" if formula else ""
-    return f"{src} -> {dst}: {bus_bits} bits{formula_part}"
+    pipe_part = f"  [pipelined x{stages} stages]" if stages > 0 else ""
+    return f"{src} -> {dst}: {bus_bits} bits{formula_part}{pipe_part}"
 
 
 @app.callback(

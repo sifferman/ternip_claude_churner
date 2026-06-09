@@ -570,6 +570,11 @@ def _build_NumTmatmulBanksPerCore(
     moa_out_bits = row_parallelism * fxp
     iv_to_moa_bits = ivr_per_unit * fxp
 
+    # Per-unit params: IV/EV storage scales with D/N, not D. Passed to
+    # cell_estimates so per-unit IV/EV nodes get the correct size.
+    per_unit_params = dict(params)
+    per_unit_params["D"] = ivl_per_unit
+
     nodes: list[Node] = []
     edges: list[Edge] = []
 
@@ -676,11 +681,13 @@ def _build_NumTmatmulBanksPerCore(
             ))
             nodes.append(_make_node(
                 node_id=iv_id, label=f"importvector[{u}] (core {c})",
-                node_type="importvector", params=params, bank=u, core=c,
+                node_type="importvector", params=per_unit_params,
+                bank=u, core=c,
             ))
             nodes.append(_make_node(
                 node_id=ev_id, label=f"exportvector[{u}] (core {c})",
-                node_type="exportvector", params=params, bank=u, core=c,
+                node_type="exportvector", params=per_unit_params,
+                bank=u, core=c,
             ))
 
             # 1-to-1 within a core: tmatmul_dma[u] -> tmatmul_unit[u].

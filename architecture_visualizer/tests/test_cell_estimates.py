@@ -100,20 +100,28 @@ def test_vp_affects_rowwise_op():
     assert double_vp == 2 * base
 
 
-def test_tmatmul_unit_is_sum_of_children():
+def test_tmatmul_unit_glue_only_does_not_double_count():
+    # Per the visualizer's convention (same as ternip_core): tmatmul_unit's
+    # MOA/IV/EV children are rendered as separate nodes with their own
+    # cell counts. The tmatmul_unit node itself counts only its FSM/handshake
+    # glue, NOT the sum of children, to avoid double-counting.
     moa = estimate_cells("MOA", DEFAULT_PARAMS)["count"]
     iv = estimate_cells("importvector", DEFAULT_PARAMS)["count"]
     ev = estimate_cells("exportvector", DEFAULT_PARAMS)["count"]
     unit = estimate_cells("tmatmul_unit", DEFAULT_PARAMS)["count"]
-    assert unit == moa + iv + ev + 200
+    assert unit < moa  # MOA alone dwarfs the FSM-only count
+    assert unit > 0    # but it's non-zero (FSM + handshake exist)
 
 
-def test_importvector_scales_inversely_with_N():
-    n1 = estimate_cells(
-        "importvector", dict(DEFAULT_PARAMS, NumDdrBanksUsed=1),
+def test_importvector_scales_with_effective_D():
+    # cell_estimates uses params["D"] verbatim - the topology builder is
+    # responsible for passing an effective D matching each node's actual
+    # ImportVectorLength (D for NSAI/NDB shared IV, D/N for NTB per-unit IV).
+    # Doubling D doubles the importvector's storage.
+    small = estimate_cells(
+        "importvector", dict(DEFAULT_PARAMS, D=256),
     )["count"]
-    n4 = estimate_cells(
-        "importvector", dict(DEFAULT_PARAMS, NumDdrBanksUsed=4),
+    big = estimate_cells(
+        "importvector", dict(DEFAULT_PARAMS, D=1024),
     )["count"]
-    # Halving N should multiply count by 4.
-    assert n1 == 4 * n4
+    assert big == 4 * small  # 1024 / 256 = 4
