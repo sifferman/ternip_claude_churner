@@ -49,6 +49,38 @@ changes mask which ones helped and which hurt.
 
 ## User-Generated
 
+### 3. AXI Register Slice IP extension across all cross-SLR channels (queued 2026-07-01)
+
+**Where:** `ternary_matmul/rtl/axi_ternip_batched.sv`.
+
+**What:** build_57 (2026.07.01-1020) turned on
+`UseAxiRegisterSlice=1` on `buffer_m_axi_tmatmul_r` only. The
+follow-ups, in order of increasing blast radius:
+
+1. **build_58 candidate**: extend to `buffer_tmatmul_desc` (per-bank
+   descriptor slice, 96b wide, low SLL cost). Kick if build_57 shows
+   any WNS improvement. If neutral, hold.
+2. **build_59 candidate**: extend to `buffer_loadstore_r`
+   (~523b R channel). Same NumStages=CoreInterconnectNumStages=6.
+   Bigger SLL cost — only kick if build_57+58 both improve.
+3. **build_60 candidate**: extend to `buffer_loadstore_aw / w / b /
+   ar` (write-side channels). BW-critical channels get REG_TYPE=2;
+   AW/AR/B could also go with REG_TYPE=1 (Light-Weight per PG373).
+   Add a `UseAxiRegisterSliceRegType` parameter if we need per-channel
+   REG_TYPE tuning.
+
+**Why:** PG373 documents that the R/W channels carrying burst
+transfers should use Fully-Registered mode (skid buffer, REG_TYPE=2).
+Descriptor/loadstore channels have the same cross-SLR structural
+pattern as the tmatmul R channel; if the tmatmul R change helps, the
+same lever likely helps the other cross-SLR AXI channels.
+
+**Risk:** SLL budget on AU250 is ~23K per SLR pair. Each cross-SLR
+axis_pipeline_register stage adds DATA_WIDTH SLLs per hop. Extending
+to more channels increases SLL demand — if we hit the SLL budget,
+place_design can fail (build_55 saw this). Gate the extension on
+build_57+58 outcomes.
+
 ### 2. FF / area reduction for MaxCores BatchSize ramp (investigation)
 
 User-directive: "We may find that we actually want to reduce the
