@@ -72,11 +72,23 @@ slr=` only supports assigning to ONE SLR.)
 
 ## 2026-07-01 8:44 PM PDT — Vivado AXI Register Slice IP (PG373) integration
 
-### Status
+### Status — UPDATE 2026-07-02 4:20 PM PDT: boundary-level integration DONE
 
-`ternip_pipelined_interconnect.Implementation` now has three options.
-The third (`"vivado_axis_register_slice"`) is a stub that fatals at
-elaboration — the actual Vivado IP integration hasn't been done yet.
+The real PG373 IP is now integrated at the block-design level
+(build_61 candidate, ternary_matmul commit 9ade32f): one
+`xilinx.com:ip:axi_register_slice:2.1` per DDR bank between
+`axi_interconnect_bank_<b>` and the `M_AXI_<b>` boundary port, all
+channels in Multi SLR Crossing mode with `USE_AUTOPIPELINING=1`.
+Validated via OneCore project.xpr build. This covers the actual
+cross-SLR hops (kernel ↔ DDR controllers pinned per-SLR by the
+platform), which the QoR analysis shows is where the boundary-side
+failing cluster lives.
+
+The RTL-internal option below
+(`ternip_pipelined_interconnect.Implementation="vivado_axis_register_slice"`)
+remains a stub that fatals at elaboration — only needed if we later
+want the IP INSIDE the kernel's internal ready/valid links, where the
+alexforencich chains already do the job. Lower priority now.
 
 ### What Vivado IP integration needs
 

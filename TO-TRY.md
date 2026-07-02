@@ -49,6 +49,28 @@ changes mask which ones helped and which hurt.
 
 ## User-Generated
 
+### 4. QoR-report-driven congestion fixes (queued 2026-07-02, evidence-backed)
+
+From `report_qor_suggestions` + `report_design_analysis -congestion` on
+build_26's BS=6 routed DCP (archived `artifacts/qor_build26_bs6/`).
+Every level-5 congestion window is dominated by per-core
+`tmatmul/importvector/decoupled_ready.buffer`, and Vivado explicitly
+blames **over-replication** (RQS_CONG-9) and LUT combining
+(RQS_CONG-3_1). Candidates in priority order:
+
+- **build_62-a**: review `pre_opt_design.tcl`'s blanket
+  `MAX_FANOUT=100` pass (FLAT_PIN_COUNT>100). Vivado says our
+  replication is CAUSING the congestion it was meant to fix. Options:
+  raise threshold to >300, scope the filter away from
+  `decoupled_ready.buffer` nets, or drop pass 2 entirely. Also saves
+  the ~2h impl-time TCL scan at MaxCores scale.
+- **build_62-b**: `read_qor_suggestions` feed-forward — the new
+  `post_route_qor.tcl` hook writes `qor_suggestions.rqs` every build;
+  add an opt_design TCL.PRE step that reads the previous build's .rqs
+  (both RQS_CONG suggestions are marked Automatic=Yes).
+- **build_62-c**: `EQUIVALENT_DRIVER_OPT=MERGE` property on the
+  importvector buffer region manually if a/b don't land it.
+
 ### 3. AXI Register Slice IP extension across all cross-SLR channels (queued 2026-07-01)
 
 **Where:** `ternary_matmul/rtl/axi_ternip_batched.sv`.
