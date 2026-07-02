@@ -9,7 +9,69 @@ considered, and how to redirect if the user wants something different.
 
 ---
 
-_(no open questions)_
+## 2026-07-01 8:44 PM PDT — Vivado AXI Register Slice IP (PG373) integration
+
+### Status
+
+`ternip_pipelined_interconnect.Implementation` now has three options.
+The third (`"vivado_axis_register_slice"`) is a stub that fatals at
+elaboration — the actual Vivado IP integration hasn't been done yet.
+
+### What Vivado IP integration needs
+
+1. **`create_ip` TCL hook** — probably a new file
+   `synth/pynqvivado_common/create_axis_register_slice_ip.tcl` sourced
+   at project-setup time (before `sv2v`/synth). Command shape:
+   ```tcl
+   create_ip -name axis_register_slice -vendor xilinx.com \
+             -library ip -version 1.1 \
+             -module_name axis_register_slice_pg373_ternip
+   set_property -dict [list \
+       CONFIG.TDATA_NUM_BYTES {66} \
+       CONFIG.HAS_TREADY {1} \
+       CONFIG.REG_CONFIG {12} \  # 12 = Multi-SLR Crossing mode
+   ] [get_ips axis_register_slice_pg373_ternip]
+   generate_target {synthesis simulation} [get_ips ...]
+   ```
+2. **Multiple width instances** — each `Implementation="vivado_axis_register_slice"`
+   call site has a different `DataWidth`. Either:
+   - Generate one IP per width used (need to enumerate uses at TCL time), or
+   - Instantiate the raw behavioural module
+     `axis_register_slice_v1_1_XX_axis_register_slice` from the IP repo
+     directly (referring to the encrypted RTL by name — works if the
+     `IP_CACHE` is populated).
+3. **RTL instance** — replace the `initial $fatal` stub in the
+   `g_vivado_axis_register_slice` genblock of
+   `ternip_pipelined_interconnect.sv` with a real instantiation of the
+   generated wrapper.
+4. **Simulation model** — the IP has a behavioural simulation model; make
+   sure the TCL `generate_target {simulation}` step emits it and
+   verilator can compile the resulting `.v`.
+
+### Alternative considered
+
+Auto-pipelining via UG949 HDL attributes (`(* autopipeline_module="yes" *)`
++ `AUTOPIPELINE_GROUP` / `AUTOPIPELINE_LIMIT`) — same underlying
+mechanism as PG373 Multi-SLR Crossing / Auto-Pipeline Insertion mode.
+Doesn't need IP catalog integration; just add attributes to the module.
+Rejected for now because the module has a chain of `axis_pipeline_fifo`
+instances rather than a simple FF-only pipeline, which is the shape
+auto-pipelining expects.
+
+### Decision path
+
+- If the current build's `axis_pipeline_register` (Fully-Registered
+  analog) shows measurable WNS improvement over build_56, do the
+  `create_ip` integration for `"vivado_axis_register_slice"` and A/B
+  compare against `axis_pipeline_register` on the same channel. The IP's
+  LAGUNA-aware placement + auto-pipelining should beat pure-RTL.
+- If `axis_pipeline_register` is neutral / negative, the Vivado IP is
+  unlikely to help either — skip the integration work, iterate on
+  per-instance NumStages instead.
+
+---
+
+
 
 ---
 
