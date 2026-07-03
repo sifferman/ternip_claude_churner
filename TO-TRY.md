@@ -49,6 +49,55 @@ changes mask which ones helped and which hurt.
 
 ## User-Generated
 
+### 5. Design-improvement brainstorm (2026-07-03, grounded in build_63's full CSV + utilization)
+
+Evidence base: build_63 (first completed MaxCores build) — 12,053
+failing endpoints, kernel at 16% LUT / 12% FF / **0.76% BRAM / 2.4%
+DSP**. The design is structurally bound, not area bound. Endpoint
+census: importvector 55%, gbfifo 23%, everything else noise.
+
+**Pillar 1 — kill the two structural clusters (timing):**
+
+- **A. FSM→importvector-buffer CE cluster (6688 endpoints, FO=519).**
+  Worst importvector paths are `FSM_onehot_state_q[2] →
+  fifo.m_axis_tdata_reg[*]/CE`, net-delay 3.1 ns — the cluster the MOA
+  comment calls "needs structural register insertion." Options ranked:
+  (i) RQS feed-forward (Vivado's RQS_TIMING-3 auto-applies
+  FORCE_MAX_FANOUT to these exact nets — zero RTL risk);
+  (ii) importvector pmem NumLanes 8→16 (halves per-lane CE to ~260;
+  8 was a win, 64 was chaos, 16 untested on importvector);
+  (iii) per-buffer registered-enable from pre-decoded `start_import_q`
+  WITH `(* MAX_FANOUT=25 *)` (the build_47→48 lesson).
+- **B. gbfifo `head_r` → wide-mux band (265 sources in the -0.5..-1.5
+  band; silu paths at -1.4).** bsg_two_fifo's head pointer drives wide
+  output muxes. Options: skid register between PISO output and
+  sig/silu stage input (TO-TRY #0 family), or registered-output
+  variant of the consumer FIFOs.
+
+**Pillar 2 — spend the idle silicon (tokens/sec):**
+
+- **C. NumVectorRegisters 4→8**: 871→933 t/s at BS=5 (+7.2%), swaps
+  394→10, BRAM 0.76%→~1.5%. Config-only. Ship in the first build after
+  timing closes.
+- **D. VectorParallelism 4→8 at MaxCores**: DSPs are 97.6% idle;
+  compute exact t/s first; sequence AFTER Pillar 1B since it widens
+  the sig/silu paths.
+- **E. BS ladder 5→6→8** (MOA fanin-2 already staged; 8 → 1248 t/s).
+
+**Pillar 3 — close the flow loop:**
+
+- **F. RQS feed-forward**: `post_route_qor.tcl` already writes
+  `qor_suggestions.rqs` every build; add an opt_design TCL.PRE step
+  that runs `read_qor_suggestions` on the previous build's .rqs.
+  Covers A(i) + congestion suggestions automatically, design-matched.
+
+**Pillar 4 — architecture swings (prototype via `make vivado` first):**
+
+- **G. BRAM-backed importvector buffers**: LUTAsMem is 42k LUTs while
+  BRAM sits 99% free. Moving the wide shallow buffers into BRAM erases
+  the wide-CE class entirely (BRAM EN = 1 control pin vs FO=519 CE
+  nets). Biggest single structural win available; medium RTL effort.
+
 ### 4. QoR-report-driven congestion fixes (queued 2026-07-02, evidence-backed)
 
 From `report_qor_suggestions` + `report_design_analysis -congestion` on
