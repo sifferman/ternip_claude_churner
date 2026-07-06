@@ -120,6 +120,35 @@ blames **over-replication** (RQS_CONG-9) and LUT combining
 - **build_62-c**: `EQUIVALENT_DRIVER_OPT=MERGE` property on the
   importvector buffer region manually if a/b don't land it.
 
+### 6. Congestion-reduction structural work (2026-07-05, post build_72 congestion)
+
+build_72 proved build_48's -0.5 ns base is congestion-marginal:
+`CoreInterconnectNumStages` 6→8 (more pipeline FFs) → VPL 35-3
+congestion level 7. **Timing levers that add resources backfire.** The
+productive direction is resource REDUCTION. Candidates:
+
+- **A. BRAM-backing investigation (NEEDS `make vivado` prototype first).**
+  The idea: move importvector/exportvector `ternip_pipelined_mem`
+  storage from LUTRAM to BRAM (BRAM 99% free, LUTAsMem ~42k). CAVEAT
+  discovered 2026-07-05: `ternip_pipelined_mem_data_lane` MEM is
+  shallow-and-wide (few entries × wide data, NumLanes=8), which Vivado
+  maps to LUTRAM BY NATURE — BRAM wants deep-and-narrow. Forcing
+  RAM_STYLE=block may waste BRAMs at <2% depth and not help. MUST
+  prototype via `make vivado` (measure actual LUT/BRAM/timing delta)
+  before any pynqvivado build. Do NOT assume it's a win.
+- **B. Identify what the 42k LUTAsMem actually is** (vector_registers
+  file? gearbox/pipeline FIFOs? importvector?) via a placed-DCP
+  `report_utilization -hierarchical` on build_71's checkpoint, then
+  target the largest LUTRAM consumer that is genuinely deep enough for
+  BRAM.
+- **C. Reduce importvector wide-CE fanout structurally** (the FO=519 /
+  FO=106 clusters) via lane-split of the CE tree, not more FFs —
+  net congestion-neutral.
+
+Sequencing: gather hierarchical utilization from build_71's DCP first
+(cheap), THEN prototype the most promising reduction via `make vivado`,
+THEN one pynqvivado deliverable build if the prototype shows a win.
+
 ### 3. AXI Register Slice IP extension across all cross-SLR channels (queued 2026-07-01)
 
 **Where:** `ternary_matmul/rtl/axi_ternip_batched.sv`.
