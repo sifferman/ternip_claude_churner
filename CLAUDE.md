@@ -345,6 +345,72 @@ cache TTL.
 - **Sim/lint failures after RTL edit**: ALWAYS your bug. Fix before any
   Vivado build — Vivado is way too slow to debug functional issues.
 
+## FUNCTIONAL CORRECTNESS IS A FIRST-CLASS GOAL — timing closure ≠ working design
+
+**Read this before trusting any "closed" build.** On 2026-07-06, build_75
+(2026.07.06-0442) became the first MaxCores bitstream to close timing
+(WNS +0.009) and was run on the AU250 via `fulladd`. Result:
+- `test_pynqvivado_basic` (isolated tmatmul/add/stall): PASSED.
+- `test_pynqvivado` (full MMfreeLM-370M): **first layer failed ~77% of
+  elements** vs the bit-accurate emulator, and `demo_pynqvivado`
+  generated **garbage text** ("ed]2.. and's so N and Out...").
+- BUT `test_emulator` (pure-software emulator vs float reference):
+  **0 failures, all layers pass** — the algorithm/RTL-intent is correct.
+
+So the design was timing-optimized for ~75 builds while **full-model
+functional correctness was never checked** — cocotb and the SV TBs are
+unit/smoke tests (single tmatmul, reset, stall); nothing ran the full
+model end-to-end. A functional gap (RTL-vs-emulator divergence, or a
+too-thin timing margin that miscomputes on silicon) was invisible until
+the first hardware run. **The bug may have been present from the start
+of the branch.**
+
+**New rule: a build is not "good" until it computes correctly, not just
+closes timing.** The optimization target (tokens/sec) is meaningless if
+the tokens are wrong. Correctness gates now rank ABOVE timing:
+
+1. **`test_emulator <config> <model>`** (pure software, no FPGA, ~1 min):
+   emulator vs float reference. Must pass at least layer 0 (per the
+   hw_emu pass criterion). This is the algorithm/instruction-stream
+   sanity check. RUN IT — it's cheap and it's the baseline truth.
+2. **Full-model RTL simulation** (the MISSING test): run the full model
+   instruction stream through verilator/vcs and compare to the emulator.
+   If it diverges, it's an RTL bug (bisect in sim across history —
+   cheap, no hardware). If it matches, RTL is correct and any hardware
+   failure is timing/physical. *(A harness for this needs to be built;
+   until it exists, treat full-model correctness as UNVERIFIED.)*
+3. **On-silicon validation** via `fulladd` (the machine with the AU250):
+   after a bitstream closes timing, run `test_pynqvivado_basic`, then
+   `test_pynqvivado` (first-layer pass = OK, per rounding), then
+   `demo_pynqvivado` (coherent text = real end-to-end pass). See
+   "Running on hardware (fulladd)" below.
+
+**Timing margin caveat**: WNS +0.009 is essentially zero PVT margin. A
+report-"closed" design at near-zero slack can still miscompute on
+silicon. Do not call a build a deliverable on +0.009; aim for real
+positive margin, and always confirm with on-silicon correctness.
+
+## Running on hardware (fulladd)
+
+The AU250 is on host `fulladd` (filesystem shared with eq2 via /soe and
+/mada; XRT 2.15/2023.1; pynq 3.0.1, torch installed). To run a built
+bitstream WITHOUT triggering a 6h rebuild (the `make pynqvivado_au250_hw`
+target rebuilds if the xclbin is absent):
+
+```bash
+# stage the closed xclbin into a scratch dir (NOT the active eq2 build dir)
+mkdir -p /soe/esifferm/GitHub/ternip_claude/hw_run && cd $_
+tar -xzf <artifacts>/build.tar.gz -O <CONFIG>/hw/kernel.xclbin > kernel.xclbin
+# run on fulladd (scripts load ./kernel.xclbin; config path can be absolute)
+R=/soe/esifferm/GitHub/ternip_claude/ternary_matmul
+ssh fulladd "cd $PWD && PYTHONPATH=$R/sw_utils:$R \
+  XCL_PLATFORM=xilinx_u250_gen3x16_xdma_4_1_202210_1 \
+  python3 -m sw_utils <test_pynqvivado_basic|test_pynqvivado|benchmark_pynqvivado|demo_pynqvivado> \
+  $R/config/<CONFIG>.svh MMfreeLM-370M"
+```
+`benchmark_pynqvivado` measures throughput only (not correctness);
+`demo_pynqvivado` reads a prompt on stdin and generates text.
+
 ## Verification (run BEFORE every build — no exceptions)
 
 **Run all six gates** before committing any RTL change and before
@@ -352,6 +418,9 @@ kicking any `make vivado` or `make pynqvivado_au250_hw` build. The
 cocotb gate (#6) is mandatory because the in-tree SystemVerilog
 testbenches stub out the top-level AXI ports — only cocotb exercises
 the kernel's external `m_axi_*` / `s_axi_*` / `s_axis_*` surface.
+**Add gate #0: `test_emulator` must pass layer 0 for the chosen config
++ model — the cheap correctness baseline (see the correctness section
+above).**
 
 ```bash
 cd ternary_matmul
