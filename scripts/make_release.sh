@@ -32,10 +32,20 @@ else
     gh release create "$TAG" --title "$TITLE" --notes-file "$BODY_FILE"
 fi
 
-# Attach artifacts
-for asset in "$ART_DIR"/*.csv "$ART_DIR"/build.tar.gz; do
+# Attach artifacts — CSV, the build tar, and (if the tar was >2GB) its
+# split parts. HARD RULE: every build's dir is uploaded, even failed ones,
+# so we can go back and read timing/congestion reports for the next attempt.
+for asset in "$ART_DIR"/*.csv "$ART_DIR"/build.tar.gz "$ART_DIR"/build.tar.gz.part_*; do
     [[ -f "$asset" ]] || continue
     gh release upload "$TAG" "$asset" --clobber
 done
+
+# Verify the build dir actually attached (tar or parts). Fail LOUDLY if not —
+# a release without the build dir is how build_76 became un-inspectable.
+if gh release view "$TAG" --json assets -q '.assets[].name' 2>/dev/null | grep -qE 'build\.tar\.gz'; then
+    echo "OK: build dir uploaded to $TAG"
+else
+    echo "ERROR: no build.tar.gz asset on $TAG — build dir NOT uploaded! Check $ART_DIR (tar missing or upload failed)." >&2
+fi
 
 echo "Release $TAG ready: $(gh release view "$TAG" --json url -q .url)"

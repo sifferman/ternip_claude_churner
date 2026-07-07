@@ -81,6 +81,17 @@ if [[ -d "$BUILD_DIR" ]]; then
     tar czf "$OUT_DIR/build.tar.gz" --exclude="$CONFIG/hw_emu" \
         -C "$PROJECT_DIR/synth/pynqvivado_au250/build" "$CONFIG" 2>&1 | tail -5 || true
     ls -lh "$OUT_DIR/build.tar.gz"
+    # GitHub caps a single release asset at 2GB. If the tar is larger, split
+    # into ~1.8GB numbered parts so make_release.sh can upload them all.
+    # Reassemble with: cat build.tar.gz.part_* | tar xzf -
+    rm -f "$OUT_DIR"/build.tar.gz.part_*
+    tar_size=$(stat -c %s "$OUT_DIR/build.tar.gz")
+    if (( tar_size > 1900000000 )); then
+        echo "build.tar.gz is $((tar_size/1000000))MB > 2GB — splitting into parts"
+        split -b 1800M -d "$OUT_DIR/build.tar.gz" "$OUT_DIR/build.tar.gz.part_"
+        rm -f "$OUT_DIR/build.tar.gz"
+        ls -lh "$OUT_DIR"/build.tar.gz.part_*
+    fi
 else
     echo "WARN: no build dir at $BUILD_DIR — skipping tar"
 fi
