@@ -231,3 +231,37 @@ across FUs would also unlock more throughput per cycle.
 
 Awaiting your guidance on whether to attempt option 1 (or 2 if
 you prefer the smaller scope), or stop at build_44.
+
+## 2026-07-07 — CORRECTNESS ROOT CAUSE FOUND: bank 1 broken on silicon
+
+**Resolved the "hardware garbage" mystery.** Enhanced test_pynqvivado_basic
+(commit 984b0f2) with full-random per-bank tmatmul checks; run on the real
+build_75 FPGA:
+- Bank 1 output columns (256-511) are systematically WRONG; banks 0/2/3
+  bit-perfect. Deterministic across all random matrices → NOT scattered timing.
+- Same test in hw_emu (timing-free): all 4 banks correct → RTL LOGIC IS FINE.
+- => bank 1 is a PHYSICAL fault on silicon, not a logic bug.
+
+**Mechanism:** build_75 SLR utilization is lopsided — SLR0 68% / SLR1 73% CLB
+(core packed here) vs SLR2 19% / SLR3 13% (near-empty). Bank 1's DMA is pinned
+to SLR1, the most congested SLR → tightest routing → "meets" at WNS +0.009 on
+paper, fails under silicon PVT. Every tmatmul's bank-1 columns corrupt →
+full-model garbage.
+
+**When it regressed:** the NumDdrBanksPerTmatmul branch itself. Known-good
+850d6c3 (2026-05-13) is SINGLE-BANK (no NumDdrBanksPerTmatmul, no floorplan) —
+it worked because there was no multi-bank cross-SLR routing. The 4-bank split
+(this branch's premise) + SLR-packing floorplan has ~never worked on silicon.
+
+**Recommended fix:** rebalance floorplan to spread core logic into empty
+SLR2/SLR3 (relieve SLR1), rebuild MaxCores, validate with test_tmatmul_thorough
+(must show per-bank=[0,0,0,0] on silicon). NOT an RTL change.
+
+**DECISION NEEDED (each build ~5-6h):**
+ (a) Rebalance floorplan + rebuild [recommended, most direct]
+ (b) Build+test 850d6c3 as known-good baseline first, then bisect
+ (c) Attack via floorplan-off build (advisor already nuked the packing script;
+     floorplan is currently DISABLED in repo — a build now runs floorplan-off,
+     testing whether natural v++ placement avoids the SLR1 congestion)
+Held off auto-kicking a 5-6h build pending direction (user was actively
+steering; asked but timed out at 60s).
