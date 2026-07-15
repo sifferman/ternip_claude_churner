@@ -611,3 +611,30 @@ CLAUDE.md "Things that have been done and worked" for ideas to
 extend (e.g., the 2026.05.24-0501 input slice could have analogues on
 exportvector, rowwise_operation, etc.), and re-read `references/` for
 new techniques.
+
+## User-Generated (2026-07-15): Heterogeneous per-SLR BatchSize (smaller BS on SLR1)
+**Motivation (user):** SLR1 hosts the XRT shell/static logic → most congested → its CU
+is the tightest fit. Give the SLR1 CU a smaller BatchSize so the other 3 SLRs can run
+full BS.
+
+**Constraint:** `nk=ternip_ip:4` replicates ONE kernel → all CUs share BatchSize.
+Heterogeneous BS requires TWO kernel .xo variants.
+
+**Gated on:** the running uniform BS=8 + rms-fix build (2026.07.15-0803). OOC closed at
+BS=8 but OOC has no shell, so it did NOT test SLR1 congestion. The full build is the real
+test:
+- If it CLOSES → uniform BS=8 = 2778 tok/s, heterogeneity unnecessary (best outcome).
+- If it FAILS clustered in the SLR1 CU (ternip_ip instance 4, slr_order {0 3 2 1} → the
+  4th CU) → heterogeneous is the fix.
+
+**Implementation sketch (if needed):**
+1. Two config .svh: BS=8 (ternip_ip) + BS=4-or-6 (ternip_ip_small).
+2. Build two kernel .xo: package_kernel.tcl with $name=ternip_ip and =ternip_ip_small
+   (separate synth+package each). generate_kernel_xml.tcl for both names.
+3. generate_kernel_cfg.tcl: `nk=ternip_ip:3,ternip_ip_small:1`; sp=/slr= map the 3 big
+   CUs to SLR0/2/3 (banks 0,2,3) and the small CU to SLR1 (bank 1).
+4. Host (test/benchmark/demo): per-instance BatchSize (instruction stream + data layout
+   differ per CU). Bank map already [0,3,2,1]; small CU is instance 3 → SLR1/bank1.
+
+**tok/s:** (8,8,8,6)=30 units ~2604; (8,8,8,4)=28 ~2431. Both beat BS=6 (24, 1943),
+both lose to uniform BS=8 (32, 2778). So only pursue if uniform BS=8 misses on SLR1.
