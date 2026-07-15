@@ -638,3 +638,12 @@ test:
 
 **tok/s:** (8,8,8,6)=30 units ~2604; (8,8,8,4)=28 ~2431. Both beat BS=6 (24, 1943),
 both lose to uniform BS=8 (32, 2778). So only pursue if uniform BS=8 misses on SLR1.
+
+### UPDATE 2026-07-15: Heterogeneous per-SLR BatchSize — DATA SAYS IT WON'T HELP
+The uniform BS=8 + rms-fix full build (2026.07.15-0803) failed −0.430 with 13550 failing
+endpoints spread across ALL 4 CUs: ip_2/SLR3 8518, ip_1/SLR0 7508, ip_4/SLR1 6284,
+ip_3/SLR2 4734. **SLR1 is NOT the bottleneck** (SLR3/SLR0 fail worse). Each CU's failures
+are intra-CU, and no SLR can individually hold BS=8. So smaller-BS-on-SLR1 (or any config
+with a BS=8 CU) will not close. Heterogeneous is DEAD for exceeding uniform BS=6 unless a
+fundamentally lower-density kernel is developed first. BS=6 (1943 tok/s) is the nk=4
+tok/s ceiling. Do NOT build the 2-kernel heterogeneous flow against the current density.
