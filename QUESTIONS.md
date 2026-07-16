@@ -202,3 +202,39 @@ to (a) debug the readback stall in `test_pynqvivado`, or (b) build the full-mode
 RTL-sim harness (verilator, compare to emulator) so full-model correctness is checked
 pre-silicon on every build? I've defaulted to treating demo's coherent text as the
 end-to-end correctness gate for now.
+
+## 2026-07-15 — tok/s optimization has CONVERGED at nk=4 BS=6 (needs strategic steer)
+After silicon-validating nk=4 BS=6 (1943 tok/s, coherent text), I made 3 attempts to
+exceed it, all failed — this is the "3 iterations → wrong layer, step back" signal:
+- BS=8: −0.114 (rms logic depth)
+- BS=8 + rms pipeline fix: −0.430 (rms cleared, but globally too dense; all 4 CUs, shell)
+- BS=6 + rms fix: −0.059 (rms fix's FFs perturbed the congestion-limited placement → backfired)
+Reverted the rms fix. Deliverable = validated flagship BS=6 (release 2026.07.11-2126).
+
+**Every compute-density lever is exhausted:**
+- BS: 6 is the ceiling (8 too dense: −0.430 full-chip; not SLR1-specific — SLR3/SLR0 fail worse)
+- VP=8: +32% tok/s but density-blocked (−0.802)
+- TP=64 to free density: craters tok/s to 1601 < BS=6 (matmul goes compute-bound)
+- tmatmul state_q fanout: ALREADY optimized (MAX_FANOUT=25 + pipelined pre-decode); residual is density-driven
+- placement congestion directives: recipe is tuned; AltSpreadLogic_high already tried+reverted (NSAI_13→14)
+- rms pipelining: backfires at the congestion limit (FF additions perturb placement)
+
+**The ONE remaining tok/s lever is a different layer: DDR/memory-bandwidth efficiency.**
+The matmul is DDR-bound at 50% efficiency (config.py max_bytes_per_cycle ratio=0.50). A
+DDR-efficiency win raises tok/s WITHOUT adding compute density, so it dodges the
+congestion wall. But it needs real investigation of the tmatmul descriptor DMA
+(dma_r_tmatmul: burst length, read outstanding — the BD M_AXI shows NUM_READ_OUTSTANDING=2,
+possibly low; read/write contention on shared DDR) and a full build to validate on HW
+(the estimator's 0.50 is a fixed assumption). Measured tok/s was 91% of estimate, so the
+real HW is ~consistent with the 0.50 model — beating it is uncertain but is the right next
+thread. This aligns with the user's earlier question ("why is the memory ~half as slow?").
+
+**Decision needed (asked via AskUserQuestion, user stepped away):**
+(1) Density/DDR R&D — pursue the DDR-efficiency thread (recommended: only tok/s lever left).
+(2) Harden BS=6 — but placement levers are tuned/reverted, so no clean move; would be "let's see".
+(3) Lock in BS=6 (1943 tok/s) as final for this architecture; pivot bigger-picture.
+
+**Chose (pending user):** did NOT kick a speculative 5-6h build (no informative hypothesis;
+respects the "5h last resort" rule). eq2 idle awaiting steer. My recommendation: (1) —
+investigate the tmatmul DMA DDR efficiency as the next tok/s thread. If you'd rather I lock
+in BS=6 or pivot, say so.
