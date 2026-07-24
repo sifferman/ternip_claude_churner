@@ -70,6 +70,28 @@ Agent 3: real matmul is compute-bound at TP=128 (DMA idle half the time). Agent 
 ~1 beat/cycle (512b/cyc ≈ full bank BW), TP=256 = +40-49%. If 0.50 is the real DMA ceiling,
 TP=256 is futile. **Agent 2 (DMA burst/outstanding/contention) is the decider.**
 
+## P0 finding — DMA (agent 2): frontier is a qualified GO
+- DMA issues 1 descriptor/GO: contiguous 256KB, ~64 back-to-back 4KB page bursts (arlen=63,
+  capped by AXI4 4KB guard, not AXI_MAX_BURST_LEN=256). Efficient sequencing, not row-thrash.
+- The "50%" = DEMAND rate (TP=128 asks 256b/cyc = half peak), NOT lost bandwidth. DMA idle ½ time.
+- Real exposures at TP=256 (which demands 512b/cyc = 100% peak): (1) NUM_READ_OUTSTANDING=2
+  (bd.tcl:43,55) — raise to 8-16 to hide AR→R latency; (2) read/write contention — 3 masters
+  (host, loadstore R+W, tmatmul R) merge 3→1 onto one bank/CU (bd.tcl:94-138); loadstore
+  activation traffic steals read bandwidth during a matmul.
+- MODEL can't predict the TP=256 gain (hardcoded 0.50) → must build + measure on silicon.
+
+## ATTACK PLAN (frontier is a real gamble: TP=256 route ~30-45% × DMA-feeds-it)
+Three must land together for +40-49%:
+1. TP=256 (halve compute) — the hard routing fight (monolithic LUT cone). Enabler ideas:
+   accumulator as 2×128 partial cones; per-SLR pblock giving the cone room.
+2. NUM_READ_OUTSTANDING 2→16 (bd.tcl) — feed the array at 1 beat/cycle. Cheap.
+3. Contention mgmt (loadstore vs weight reads on shared bank) — harder; defer, measure first.
+Phases: (P1) TP=256 + outstanding=16, functional gates (test_emulator MUST pass — TP changes
+matmul tiling). (P2) OOC make vivado route probe (~3h). (P3) full pynqvivado_au250 if OOC clean.
+(P4) SILICON measure on fulladd (only silicon reveals the real TP=256 DDR efficiency / tok/s).
+Density note (agent 1): TP=256 competes with BatchSize for density — can't have both; TP=256
+(+40-49%) > BS=8 (+30%) IF it lands.
+
 ## Log
 - 2026-07-24: branch MatmulDdrFrontier off validated state. Sweep confirms +49% prize
   (TP=256 + eff 0.9). Agent 3: matmul is COMPUTE-bound at TP=128 → TP=256 is the primary
