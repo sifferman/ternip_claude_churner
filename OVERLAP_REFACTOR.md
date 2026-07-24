@@ -26,7 +26,22 @@ a 2nd vreg read port can capture the overlap.
 **GATING QUESTION:** is the overlap dependency-locked or schedulable? (agent 3 answering)
 If dependency-locked → abandon, lock in 1943 tok/s. If schedulable → proceed.
 
-## Plan (phased; each phase gated by sim before Vivado)
+## ⛔ GATE VERDICT (2026-07-24): DO NOT PROCEED — overlap is dependency-locked
+Investigation (3 agents + model measurement) is CONCLUSIVE:
+- The 53.6% matmul-serial is TRUE data dependency (transformer recurrent critical chain:
+  matmul → post-proc → next matmul; layer N → N+1), NOT a scheduler artifact.
+- 24.3% of runtime is non-matmul-ONLY (no matmul in flight to hide under) — untouchable.
+- The +25% (max_parallelism 1.25x) is DEPENDENCY-BLIND — an over-optimistic bound.
+- The RTL ALREADY overlaps one op/GO; measured 1943 tok/s = 91% of the overlap-assuming
+  model (2130). The HW already captures the main available overlap.
+- EMPIRICAL TEST: aggressive ldv-prefetch scheduler tweak → cycle_counter 3,379,223 →
+  3,379,616 (0.01% WORSE). The one capturable slice Agent 3 named captures nothing.
+**Conclusion: the FU-overlap refactor's realistic payoff is ~0, not +25%. nk=4 BS=6
+(1943 tok/s) is near-optimal for this architecture + model. Recommend LOCK IN.**
+The matmul (76%, DRAM-bound at the TP=128 crossover) is the real bottleneck; speeding it
+needs TP↑ (congestion-blocked at nk=4) AND DDR-efficiency↑ together — the actual ceiling.
+
+## Plan (phased; each phase gated by sim before Vivado) — SUPERSEDED by gate verdict above
 - [ ] **P0 Investigation** (in progress): map core dispatch, vreg ports, overlap ceiling.
 - [ ] **P1 Design**: concurrent-FU-issue scheme + 2nd vreg read port; sim harness to
       MEASURE achieved overlap (cycle_counter drop) before any Vivado build.
