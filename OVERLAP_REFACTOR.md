@@ -42,6 +42,41 @@ If dependency-locked → abandon, lock in 1943 tok/s. If schedulable → proceed
   payoff is uncertain; don't burn 5-6h builds on unvalidated overlap).
 - Any FF-heavy addition risks the congestion limit — keep the new logic local + lean.
 
+## P0 investigation findings (2026-07-24)
+
+### Core dispatch (ternip_core.sv) — the blocker is SURGICAL
+- Instruction accept = conjunctive AND of ALL FUs' `in_ready` + `!stall` (lines 393-397).
+  Any one busy FU blocks issue of EVERY instruction → in-order single-issue.
+- Dispatch is a stateless combinational demux on `instruction_i.fu` (lines 486-517); no
+  central "current FU" register. "Busy" = each FU's `in_ready_o` low.
+- Vreg port = fixed-PRIORITY MUX (loadstore>rms>rowwise>tmatmul, lines 399-437), NOT a real
+  arbiter; a sim assertion `$fatal`s if >1 FU drives it (lines 444-459). Relies on
+  single-FU-active invariant.
+- **KEY: during tmatmul_go the vreg port is FREE** (GO uses DDR + internal importvector/
+  exportvector BRAMs, `vector_request_valid_o=0`), and tmatmul HOLDS `in_ready=1` during GO
+  (line 475, via 1-entry queue). So ONE non-matmul op already overlaps a GO today (= the
+  model's 29.2%). Nothing structural serializes it except the conjunctive gate.
+- **FIX = per-target issue gate** (gate `instruction_ready_o` on only the selected FU's
+  `in_ready`) + **turn the vreg mux into a real arbiter with backpressure** (stall loser,
+  drop the one-driver assertion). This extends overlap from 1 op to a chain of independent
+  non-matmul ops during each GO.
+
+### vector_registers (ternip_vector_registers.sv + ternip_pipelined_mem.sv)
+- Single shared R/W request port (1RW). Backed by INFERRED single-port RAM (`MEM[]`,
+  one addr/cycle) — so the U250 BRAM's 2nd port is IDLE/free.
+- 2nd read port = RTL-only (~40-60 lines pipelined_mem, ~15-20 vector_registers, ~30-60 core),
+  negligible BRAM cost. Hazard: true-dual-port read-during-write collision → keep an
+  interlock at the core-arbiter level (safest), or add write-forwarding.
+- **2nd read port is OPTIONAL** — the arbiter-with-backpressure can serialize port access
+  cycle-by-cycle; the 2nd port only helps if both concurrent FUs are read-bound every cycle.
+
+### Refactor scope (revised, smaller than feared)
+1. Per-target issue gate (ternip_core ~lines 393-397) — the main unblock, few lines.
+2. Vreg port real arbiter + backpressure + relax assertion (ternip_core ~399-459).
+3. (Optional) 2nd vreg read port if port contention limits measured overlap.
+GATE still pending: agent 3 — is the overlap dependency-locked or schedulable?
+
 ## Log
-- 2026-07-24: branches FuOverlap created (ternip/ternary_matmul/churner) off validated state.
-  3 investigation agents launched (core dispatch, vreg ports, dependency-vs-schedulability).
+- 2026-07-24: branches FuOverlap created off validated state. 3 investigation agents launched.
+  Agents 1 (core dispatch) + 2 (vreg ports) done — findings above; blocker is the conjunctive
+  issue gate, fix is surgical. Awaiting agent 3 (dependency-vs-schedulability gate).
