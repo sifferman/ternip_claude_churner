@@ -238,3 +238,14 @@ thread. This aligns with the user's earlier question ("why is the memory ~half a
 respects the "5h last resort" rule). eq2 idle awaiting steer. My recommendation: (1) —
 investigate the tmatmul DMA DDR efficiency as the next tok/s thread. If you'd rather I lock
 in BS=6 or pivot, say so.
+
+## 2026-08-02 — cocotb env broke (glibc 2.35 < 2.36); workaround found
+The oss-cad-suite cocotb auto-updated to 2.1.0.dev, which needs glibc >=2.36 (arc4random symbol),
+but all hosts (login + eq2 + fulladd) have glibc 2.35 -> cocotb fails to link (undefined reference
+to arc4random@GLIBC_2.36). This broke mid-session (cocotb ran fine earlier).
+WORKAROUND (verified, gives TESTS=4 PASS=4): use the system cocotb 1.9.2 (/soe/esifferm/.local)
+with the oss-cad verilator 5.051:
+  cd dv/cocotb/axi_ternip_batched && env -u XILINX_XRT \
+    PATH=/soe/esifferm/.local/bin:/mada/users/esifferm/Utils/oss-cad-suite/bin:/usr/bin \
+    make SIM=verilator CONFIG=xcu250_D=1024_OneCore
+(.local/bin first -> cocotb-config 1.9.2; oss-cad before /usr/bin -> verilator 5.051 not old 4.038.)
