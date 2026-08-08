@@ -96,3 +96,25 @@ Density note (agent 1): TP=256 competes with BatchSize for density — can't hav
 - 2026-07-24: branch MatmulDdrFrontier off validated state. Sweep confirms +49% prize
   (TP=256 + eff 0.9). Agent 3: matmul is COMPUTE-bound at TP=128 → TP=256 is the primary
   lever. Awaiting agent 1 (TP=256 routing feasibility) + agent 2 (real DMA beat-rate).
+
+## Idea B: 2nd vreg read port (non-matmul reduction, density-safe, 300 MHz)
+Measured the non-matmul 24%: rowwise dominates (838K cyc), and binary ops (mul 559K, add 111K,
+sub 19K = 689K, all 3N) are 3N because they serialize 2 operand reads + 1 write through the SINGLE
+vreg port (confirmed ternip_rowwise_operation.sv:268-320). NOT VP-bound, NOT compute-bound -> a 2nd
+BRAM read port (idle/free on U250, inferred single-port today) makes binary ops 3N->2N.
+- Model gain: 2130.9 -> 2185.0 = **+2.5%** (1943 -> ~1992 tok/s). Modest because matmul overlap
+  hides most binary-op work; only non-overlapped (24% window) counts.
+- Density-CHEAP (free 2nd BRAM port), stays 300 MHz -> avoids the H2C wall entirely (unlike VP=8).
+- Hazard: read-during-write (in-place binary op) needs interlock/forwarding — being handled.
+- Implementing: 2nd read port dedicated to rowwise_operation; port A unchanged for all other FUs.
+- BUILT (2026.08.02-1126): CLOSES +0.022 @ 300MHz, silicon throughput 1998 tok/s (+2.9%, matches
+  model), basic test all 4 CUs PASS. BUT demo = GARBAGE (reproducible) -> FUNCTIONALLY BROKEN.
+  ROOT: the MUL/DIV path used a fragile "pair-by-order collapsing holding register" scheme that
+  desyncs across the full model's 720 back-to-back MULs -> operand mispairing -> garbage. ADD/SUB
+  (robust cycle-aligned, read_ready pinned high both ports) is CORRECT. test_emulator + cocotb +
+  rowwise_operation_tb + basic ALL PASSED but MISSED it (no back-to-back-MUL stress) -> demo
+  (coherent text) is the real gate; unit tests need a back-to-back-MUL sequence + a full-model
+  RTL-sim harness. FIX: rewrite MUL to ADD's lockstep approach (both ports same latency -> feed
+  responses directly, no holding regs). Mechanism is SOUND (ADD works, +2.9% real); only MUL impl
+  buggy. Fix in progress with a reproduce-first mandate. Broken commit de93a70 stays on
+  MatmulDdrFrontier; shippable deliverable remains validated 1943 (release 2026.07.11-2126).
