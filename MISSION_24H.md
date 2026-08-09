@@ -69,6 +69,23 @@ REBUILD: kicked eq2 5:17 PM, ETA ~11:17 PM (nk4 BS6 TP128 deliverable). Card fre
 NEXT (after build): silicon-validate test_rms_norm_batch all lanes + test_pynqvivado (emu==FPGA);
 then 24 texts (multiprompt collapse WAS the rms bug -> should now work). GOAL1 ~done pending silicon.
 
+## SILICON-VALIDATED (2026-08-08 ~10:30 PM): rms fix WORKS on hardware.
+- test_rms_norm_batch on silicon: ALL 24 lanes (4 CU x 6 batch) match emulator at 0.0000. Bug FIXED.
+- 24-prompt generation: 24 DISTINCT coherent prompt-appropriate texts (France->Paris, Japan->Tokyo,
+  Italy->Rome, Germany->Berlin, Spain->Madrid, sun rises->east, largest planet->Jupiter, ...). NO
+  b>0 collapse. GOAL 2 = ACHIEVED. Lane 0 matches emulator 10/10 greedy tokens.
+- So 1943 tok/s is now REAL: all 24 lanes correct (was 4/24 before).
+REMAINING for a robust deliverable:
+- WNS = -0.073 (rebuild missed timing). Equalizer FFs perturbed the razor-thin +0.002 baseline;
+  worst failing paths are the PRE-EXISTING marginal rms datapath (square->MOA -0.071, FSM->norm_mul
+  -0.070, divider opC -0.070), not the equalizer's own logic. Need to recover ~0.075ns.
+- Full-generation emu bit-match: lane 0 = 10/10; other sampled lanes match prefix then diverge
+  (accumulated tiny rounding / the -0.073 violations). A clean-timing build should tighten this.
+PLAN: lighten the equalizer (min FF footprint) to un-perturb placement -> rebuild -> re-validate
+(all 24 lanes + WNS>0 + emu match). Fix committed NumSeparateKernels: ternip 3ef7a0f, tm 60279b1.
+
 ## Log
-- 2026-08-08: mission start. Paused multiprompt agent. Isolated: rms_norm b>0 = ROOT CAUSE.
-  Added regression test. Fix agent found 2 bugs, fixed+sim-verified. Rebuild running for silicon validation.
+- 2026-08-08: mission start. Isolated rms_norm b>0 root cause. Fix agent found 2 bugs
+  (ddr_address/rms_length masking + variable-latency div desync), fixed + sim-verified. Rebuilt +
+  SILICON-VALIDATED: all 24 lanes correct + 24 distinct texts (GOAL 2 done). Timing regressed to
+  -0.073 (equalizer perturbed razor-thin baseline); recovering for robust +margin deliverable.
