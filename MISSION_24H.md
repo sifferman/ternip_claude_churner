@@ -89,3 +89,13 @@ PLAN: lighten the equalizer (min FF footprint) to un-perturb placement -> rebuil
   (ddr_address/rms_length masking + variable-latency div desync), fixed + sim-verified. Rebuilt +
   SILICON-VALIDATED: all 24 lanes correct + 24 distinct texts (GOAL 2 done). Timing regressed to
   -0.073 (equalizer perturbed razor-thin baseline); recovering for robust +margin deliverable.
+
+## LIGHTER EQUALIZER (2026-08-08 ~10:50 PM): footprint minimized to recover timing.
+Root of the -0.073: the first equalizer added a NEW 68-bit result register (OutPrecision=68 for the
+rms divider) relocated into the dense rms region, displacing the marginal paths. Lighter version:
+reuse the divider's EXISTING output register (drop the 68-bit eq_result_q), drop eq_captured, use a
+down-counter+==0 (not a wide comparator), window +12. Only ~8 new small FFs now.
+Sim-verified (agent + independently by me): cocotb test_rms_norm_batch all 7 lanes 0.0000, 5/5;
+rms_tb+tmatmul_tb v+vcs; test_emulator ALL MATCH. Commits: ternip 3faa062, ternary_matmul a2d5a75.
+REBUILD running eq2, kicked 10:53 PM, ETA ~4:53 AM. On completion: check WNS (target >0), then
+full silicon validation (test_rms_norm_batch 24 lanes + test_pynqvivado x_f + 24 texts + emu match).
