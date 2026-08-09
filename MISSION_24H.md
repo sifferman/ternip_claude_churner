@@ -54,6 +54,21 @@ Both mission goals trace to ONE bug. Isolation results (all on silicon, HW vs em
 ## Once fixed: (1) validate emu==FPGA via test_rms_norm_batch + test_pynqvivado; (2) rebuild if RTL
 ## changed (5h eq2); (3) resume multiprompt agent for 24 independent texts vs the now-correct emulator.
 
+## FIX FOUND + SIM-VERIFIED (2026-08-08). Two bugs in batched rms_norm b>0:
+1. ddr_address masking (ternip_batched.sv): wrapper masked instruction.ddr_address='x for cores
+   b>0 (area opt for DDR FUs), but RMS REUSES that field as rms_length (the divider dividend). So
+   b>0 got rms_length=0 -> sqrt(0)=0 -> rms_norm out = input*0 = EXACTLY 0. Index-based -> explains
+   the broadcast-also-fails case. FIX: `if (i!=0 && instruction_i.fu != RMS) mask` -> keep it for RMS.
+2. Variable-latency DIV_BSG divider (ternip_div.sv): data-dependent latency desyncs the lockstep-
+   assuming cores (wrapper drives control/stall from core[0] only). FIX: fixed-latency equalizer
+   (hold quotient to a data-independent cycle count) -> all cores finish same cycle. (User's idea.)
+COMMITS (NumSeparateKernels, pushed): ternip 3ef7a0f, ternary_matmul 60279b1.
+SIM-VERIFIED (independently by me): test_emulator ALL MATCH; cocotb batched 5/5 incl test_rms_norm_batch
+all 7 lanes max|HW-emu|=0.0000; rms_tb+tmatmul_tb v+vcs pass.
+REBUILD: kicked eq2 5:17 PM, ETA ~11:17 PM (nk4 BS6 TP128 deliverable). Card free during build.
+NEXT (after build): silicon-validate test_rms_norm_batch all lanes + test_pynqvivado (emu==FPGA);
+then 24 texts (multiprompt collapse WAS the rms bug -> should now work). GOAL1 ~done pending silicon.
+
 ## Log
 - 2026-08-08: mission start. Paused multiprompt agent. Isolated: rms_norm b>0 = ROOT CAUSE.
-  Added regression test to test_pynqvivado_basic. Launched RTL root-cause+fix agent (sim-only).
+  Added regression test. Fix agent found 2 bugs, fixed+sim-verified. Rebuild running for silicon validation.
