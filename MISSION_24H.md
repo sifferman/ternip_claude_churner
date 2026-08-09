@@ -99,3 +99,16 @@ Sim-verified (agent + independently by me): cocotb test_rms_norm_batch all 7 lan
 rms_tb+tmatmul_tb v+vcs; test_emulator ALL MATCH. Commits: ternip 3faa062, ternary_matmul a2d5a75.
 REBUILD running eq2, kicked 10:53 PM, ETA ~4:53 AM. On completion: check WNS (target >0), then
 full silicon validation (test_rms_norm_batch 24 lanes + test_pynqvivado x_f + 24 texts + emu match).
+
+## TIMING: congestion cliff — lighter equalizer got WORSE (2026-08-09 ~3:30 AM).
+Heavy equalizer WNS=-0.073; LIGHTER equalizer WNS=-0.140 (worse!). "Fewer FFs->better timing" is
+FALSE here: design is at a razor-thin congestion cliff (+0.002 baseline), any rms-region
+perturbation swings WNS unpredictably (placement noise). FF-count approach is a dead end.
+NEW PLAN (principled): fix bug 2 at the WRAPPER, not the divider. Revert the equalizer entirely
+(rms datapath back to +0.002 baseline netlist), keep the trivial bug-1 ddr_address/rms_length fix,
+and add a cross-core JOIN in ternip_batched.sv (wait for ALL cores' ready/stall at each instruction
+boundary, re-sync every instruction) so the variable-latency divider no longer desyncs b>0. The
+wrapper-join is OFF the rms critical path -> timing should return to ~+0.002. Agent working it.
+FALLBACK: the -0.073 heavy-equalizer xclbin is FUNCTIONALLY CORRECT (all 24 lanes validated + 24
+texts) and staged at fulladd:/soe/esifferm/GitHub/ternip_claude/hw_run_rmsfix/kernel.xclbin. If
+wrapper-sync doesn't close, ship that (negative margin but silicon-validated) as interim.
