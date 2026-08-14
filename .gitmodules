@@ -41,3 +41,6 @@
 [submodule "references/RapidWright"]
 	path = references/RapidWright
 	url = org-3189299@github.com:Xilinx/RapidWright.git
+[submodule "references/AutoBridge"]
+	path = references/AutoBridge
+	url = git@github.com:UCLA-VAST/AutoBridge.git
