@@ -319,3 +319,26 @@ PISO alone, to book whatever margin the patch gives before spending it.
 370M's own next step (BS=15 at +5.9%, or NVR=8 at +5.3%, or both) is queued behind
 B and C because 370M is the healthiest model and the big two have larger untapped
 gains.
+
+### Exact BatchSize projections (2026-08-28, after the sweep finished)
+
+Caveat found while reading the numbers: `report_instruction_timing`'s
+`multicore tokens_per_second` is `singlecore x BatchSize_big x 3` -- it does **not**
+count the `ternip_small` kernel. Proof: 1.3B singlecore 24.8281 x 30 = 744.84,
+exactly the BS=10x3+5 row, and BS=11x3+**6** reports identically to BS=11x3+**5**.
+So the tool's ratios (+9.5% / +12.0%) overstate; scaling the *measured* silicon
+numbers by lane count is the honest estimate:
+
+| model | now | BS+1 | lanes | projected | gain |
+|---|---:|---:|---:|---:|---:|
+| 2.7B | 411.35 | 9x3+5 | 29 -> 32 | ~454 | **+10.3%** |
+| 1.3B | 835.50 | 11x3+5 | 35 -> 38 | ~907 | **+8.6%** |
+| 370M | 3711.77 | 15x3+6 | 48 -> 51 | ~3944 | **+6.2%** |
+
+This confirms the B-then-C ordering (2.7B first, then 1.3B, then 370M).
+
+A second, cheaper lever falls out of the same finding: because the tool ignores
+`ternip_small`, its BatchSize has never been swept. Raising small 5 -> 6 adds one
+lane -- worth ~+2.9% on 1.3B and ~+3.4% on 2.7B for one CU's worth of area, which
+is a quarter of what a big-kernel BS+1 costs. Worth trying as the fallback if the
+big-kernel bump misses timing.
