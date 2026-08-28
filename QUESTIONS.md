@@ -271,41 +271,51 @@ silicon-validate if it closes, publish release. If it doesn't close, asym9 stand
 
 ## 2026-08-28 — overnight tok/s plan (user away until 2026-08-29)
 
-Measured silicon baseline: 370M **3711.77** tok/s (BS 14x3+6, NVR=4, WNS +0.024),
+Measured silicon baseline: 370M **3711.77** tok/s (BS 14x3+6, WNS +0.024),
 1.3B **835.50** (BS 10x3+5, WNS +0.001), 2.7B **411.35** (BS 8x3+5, WNS +0.001).
 
-**Where the headroom is.** `report_instruction_timing` NVR sweep on 370M:
+### Correction: the silu PISO is fresh margin for ALL THREE models
 
-| NumVectorRegisters | projected multicore tok/s | delta |
-|---|---:|---:|
-| 4 (current) | 3392 | — |
-| 8 | 3572 | **+5.3%** |
-| 16 | 3585 | +0.4% over NVR=8 |
+ternip main has three `pipelined_interconnect` PISO stages. Two of them
+(`ternip_sig_parallelized`, `ternip_csig_parallelized`) were already present at
+`f4666f7` -- that is the 0.468 ns already spent to close 1.3B. The third,
+`ternip_silu_parallelized`, is added ONLY by `75fa40c` (merged today) and is in
+**no validated build for any model**. Its own comment names the case it targets:
 
-NVR=8 is the knee. It is also already **proven to close** on 370M: build
-`2026.08.22-0908-370M-NVR8` hit WNS +0.002 / TNS 0 / 0 failing, at a cost of
--43 ps of margin vs NVR=4.
+> the `&silu_in_ready` reduction feeds straight back into the PISO's yumi, which
+> is the dominant critical path in `rowwise_operation` at **D=2560**.
 
-**The constraint.** 1.3B and 2.7B are both at WNS +0.001 — no margin to spend, so
-NVR=8 cannot go on them as-is. 370M has +0.024 at BS=14, still short of the 43 ps
-NVR=8 costs. So the question the running build answers is whether the newly-merged
-PISO register (ternip 75fa40c, worth 0.468 ns on 1.3B) hands 370M enough margin to
-afford NVR=8 on top of BS=14.
+D=2560 is 2.7B. So the model most likely to gain is the one with the least margin.
 
-**Build A (running, `2026.08.28-1203`)**: 370M, NS=1, BS=14x3+6, 1st-order sigmoid,
-first 370M build carrying the PISO register. Started 12:03 PM, ETA ~5:00 PM.
+### Where the tok/s actually is (report_instruction_timing projections)
 
-**Decision tree for the next kick** (chosen without waiting for the user):
-- A closes with margin >= +0.05 -> Build B = 370M NVR=8 @ BS=14 (~+5.3%, ~3900 tok/s)
-- A closes with margin < +0.05 -> Build B = 370M NVR=8 @ BS=13, and compare against
-  BS=14/NVR=4: 14->13 loses 6.25% of lanes while NVR=8 gains 5.3%, so this is only
-  worth it if BS=14/NVR=8 is shown unroutable
-- A fails to close -> NS=1 is the suspect (it reduces pipelining); revert to NS=8 and
-  rebuild 370M NVR=8 @ BS=14 on the NS=8 base
+| lever | 370M | 1.3B | 2.7B |
+|---|---:|---:|---:|
+| NumVectorRegisters 4->8 | **+5.3%** | +1.4% | +0.9% |
+| BatchSize +1 (3 more lanes) | **+5.9%** | see below | see below |
 
-**Open question for the user.** 1.3B and 2.7B are margin-starved, so their tok/s is
-gated on finding slack, not spending it. The PISO register is already in 1.3B's
-validated +0.001 build, so that lever is spent there. Candidate next levers for the
-big two, in order of my confidence: (1) whatever margin Build A shows PISO is worth
-at D=1024 may transfer to D=2560, since 2.7B is the model the PISO comment calls out
-as its motivating case; (2) the rms divider remains 73% of the infinite-HW floor.
+NVR=8 is worth it only on 370M -- at D=2048/2560 the matmul dominates and swap
+elimination barely moves the needle, so spending 43 ps of margin (its measured
+cost, from build `2026.08.22-0908-370M-NVR8`) to buy ~1% is a bad trade on the two
+models that have +0.001 and nothing to spare.
+
+**BatchSize is the lever for the big two**, and it is gated purely on margin:
+1.3B 10->11 takes lanes 35->38, 2.7B 8->9 takes 29->32. Both are ~+9-10%, far
+larger than anything else available. Neither is affordable at +0.001 -- unless the
+silu PISO pays out.
+
+### Overnight queue (chosen without waiting for the user)
+
+- **A (running, `2026.08.28-1203`)** 370M NS=1 BS=14x3+6, first build with silu
+  PISO. Started 12:03 PM, ETA ~5:00 PM. Measures what the silu PISO is worth at
+  D=1024 and whether NS=1 is viable. No tok/s gain by itself (BS unchanged).
+- **B** 2.7B BS=9x3+5 + silu PISO. Largest single prize (~+10%) and the case the
+  patch was written for, so best odds of the margin appearing.
+- **C** 1.3B BS=11x3+5 + silu PISO (~+9%).
+
+If B or C misses timing, fall back to the same model at its current BS with silu
+PISO alone, to book whatever margin the patch gives before spending it.
+
+370M's own next step (BS=15 at +5.9%, or NVR=8 at +5.3%, or both) is queued behind
+B and C because 370M is the healthiest model and the big two have larger untapped
+gains.
