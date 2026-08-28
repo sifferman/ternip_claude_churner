@@ -238,3 +238,74 @@ thread. This aligns with the user's earlier question ("why is the memory ~half a
 respects the "5h last resort" rule). eq2 idle awaiting steer. My recommendation: (1) —
 investigate the tmatmul DMA DDR efficiency as the next tok/s thread. If you'd rather I lock
 in BS=6 or pivot, say so.
+
+---
+## 2026-08-14 ~9:15 AM — CONSOLIDATED to main worktree + BS=10 building
+
+**Worktree cleanup DONE** (user request):
+- Retired `nsai` + `nsai_bs6` worktrees. Only the main `ternip_claude` worktree remains.
+- Main worktree now on **NumSeparateKernels** (churner 10ea911 -> ternary_matmul 20420ad -> ternip
+  86ba9d8, all the fixes: state_q fanout + norm_mul + round2 + bug-1 guard). Builds now run from
+  the main worktree (/soe/esifferm/GitHub/ternip_claude/ternary_matmul).
+- Preserved everything: dot backend (committed a343643 on NumDdrBanks + files brought to
+  NumSeparateKernels 46c5a63), benchmark timing-fix + hetero benchmark (5d18848), AutoBridge +
+  QUESTIONS + MISSION_24H (dadaa78/f22687f). Nothing lost.
+
+**MEASURED throughput (fixed-timer benchmark, all silicon-validated):**
+- 24-lane (nk=4 BS=6): 1942 tok/s (baseline).
+- asym8 (30-lane, BS=8 roomy): 2417 tok/s (+24.5%), 30 distinct texts validated.
+- asym9 (33-lane, BS=9 roomy): 2641 tok/s (+36%), CLOSED +0.014.
+- Model ~92% accurate (measured/model consistent across configs -> ~8% is systematic, likely DDR
+  efficiency; model-improvement ideas logged).
+
+**BS=10 building now** (from main worktree, eq2): ternip_big BS=10 x3 + ternip_small BS=6 x1 =
+36 lanes, model ~3120 tok/s. RISK: occupancy ~68-70% roomy (est), over the ~65% ceiling -> may not
+close. If it closes -> ~2850 measured (near/over 3k). If not -> asym9 (2641, +36%) is the deliverable.
+
+PENDING (side item): the parallel-compile in benchmark_pynqvivado_hetero.py uses THREADS but the GIL
+gives ~no speedup (measured 347s). Should switch to ProcessPoolExecutor for real parallelism -- not
+done yet (awaiting your threads-vs-processes preference; I lean per-distinct-config processes).
+
+AUTONOMOUS PLAN (you're away): when BS=10 finishes -> stage xclbin FIRST, read WNS, benchmark +
+silicon-validate if it closes, publish release. If it doesn't close, asym9 stands. Keep eq2 busy.
+
+## 2026-08-28 — overnight tok/s plan (user away until 2026-08-29)
+
+Measured silicon baseline: 370M **3711.77** tok/s (BS 14x3+6, NVR=4, WNS +0.024),
+1.3B **835.50** (BS 10x3+5, WNS +0.001), 2.7B **411.35** (BS 8x3+5, WNS +0.001).
+
+**Where the headroom is.** `report_instruction_timing` NVR sweep on 370M:
+
+| NumVectorRegisters | projected multicore tok/s | delta |
+|---|---:|---:|
+| 4 (current) | 3392 | — |
+| 8 | 3572 | **+5.3%** |
+| 16 | 3585 | +0.4% over NVR=8 |
+
+NVR=8 is the knee. It is also already **proven to close** on 370M: build
+`2026.08.22-0908-370M-NVR8` hit WNS +0.002 / TNS 0 / 0 failing, at a cost of
+-43 ps of margin vs NVR=4.
+
+**The constraint.** 1.3B and 2.7B are both at WNS +0.001 — no margin to spend, so
+NVR=8 cannot go on them as-is. 370M has +0.024 at BS=14, still short of the 43 ps
+NVR=8 costs. So the question the running build answers is whether the newly-merged
+PISO register (ternip 75fa40c, worth 0.468 ns on 1.3B) hands 370M enough margin to
+afford NVR=8 on top of BS=14.
+
+**Build A (running, `2026.08.28-1203`)**: 370M, NS=1, BS=14x3+6, 1st-order sigmoid,
+first 370M build carrying the PISO register. Started 12:03 PM, ETA ~5:00 PM.
+
+**Decision tree for the next kick** (chosen without waiting for the user):
+- A closes with margin >= +0.05 -> Build B = 370M NVR=8 @ BS=14 (~+5.3%, ~3900 tok/s)
+- A closes with margin < +0.05 -> Build B = 370M NVR=8 @ BS=13, and compare against
+  BS=14/NVR=4: 14->13 loses 6.25% of lanes while NVR=8 gains 5.3%, so this is only
+  worth it if BS=14/NVR=8 is shown unroutable
+- A fails to close -> NS=1 is the suspect (it reduces pipelining); revert to NS=8 and
+  rebuild 370M NVR=8 @ BS=14 on the NS=8 base
+
+**Open question for the user.** 1.3B and 2.7B are margin-starved, so their tok/s is
+gated on finding slack, not spending it. The PISO register is already in 1.3B's
+validated +0.001 build, so that lever is spent there. Candidate next levers for the
+big two, in order of my confidence: (1) whatever margin Build A shows PISO is worth
+at D=1024 may transfer to D=2560, since 2.7B is the model the PISO comment calls out
+as its motivating case; (2) the rms divider remains 73% of the infinite-HW floor.
