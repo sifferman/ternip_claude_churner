@@ -548,3 +548,47 @@ Two conclusions:
 Net for the day: no correctness defect exists in the RTL. The one genuine bug found
 was in the verification harness (cocotb `sim_build` not keyed by target, fixed in
 `99793b9`). The tok/s queue stands unchanged.
+
+## 2026-08-29 — FixedPointExponent is a FREE fix for 2.7B degeneration
+
+The 2.7B "the the the" collapse is a **quantization-format** problem, and the format
+knob that fixes it costs nothing.
+
+**Why it is free.** Every width and LUT size in `ternip_types.sv` derives from
+`FixedPointPrecision`. `FixedPointExponent` appears in exactly two places --
+`RmsSqaSumExponent = 2 * Cfg.FixedPointExponent` and the `FixedPointOne` constant --
+and neither is a width. Changing it reinterprets the same 16 bits: no wider adders,
+no bigger LUTs, no extra BRAM, no cycle-count change (so tok/s is unaffected). This is
+categorically different from raising `FixedPointPrecision`, which widens the whole
+datapath and would wreck MaxCores timing.
+
+At the current -5 the format spends 11 integer bits on a +/-1024 range that LLM
+activations never approach, while resolution starves at 0.031.
+
+| exponent | resolution | range | 2.7B greedy (hardware-accurate emulator) |
+|---|---:|---:|---|
+| **-5 (current)** | 0.031 | +/-1024 | "3000 years ago. **the the the the the the ...**" DEGENERATE |
+| -6 | 0.016 | +/-512 | "**icy** region of the Arctic. The unicorns were the size of the average horse and were the size of" |
+| **-7** | 0.0078 | +/-256 | "**icy wasteland.** The unicorns were the only creatures in the world that were able to survive the harsh" |
+| -8 | 0.0039 | +/-128 | "**icy wasteland** of the Arctic Circle." |
+| *float reference* | - | - | "*icy wasteland.* The unicorns were the size of a horse and were the size of a large dog" |
+
+-7 and -8 both reproduce the float reference's "icy wasteland" exactly. **-7 is the
+recommended setting**: it gives 4x the resolution of today while keeping +/-256 of
+headroom, and produced the longest coherent continuation.
+
+**`test_emulator` cannot see this.** It passes 192/192 at BOTH -5 and -7, so the CI
+numeric gate is blind to the difference -- it checks per-instruction agreement, not
+end-to-end generation quality. Anything we conclude about quantization quality has to
+come from `generate_emulator`, not `test_emulator`. Worth considering a CI check that
+generates text and flags degenerate repetition.
+
+**Caveats before this ships.**
+- `FixedPointExponent` is NOT on CLAUDE.md's allowed-to-modify list -> needs user
+  sign-off.
+- It changes `TERNIP_CFG`, so all three validated xclbins are invalidated and need
+  rebuilds to benefit.
+- Saturation risk is the real failure mode at smaller ranges; 1.3B and 370M are being
+  checked at -7/-8 for regressions before recommending a global change.
+- Timing should be re-verified: constants change, so logic differs slightly even
+  though widths do not.
