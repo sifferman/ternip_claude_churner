@@ -342,3 +342,42 @@ A second, cheaper lever falls out of the same finding: because the tool ignores
 lane -- worth ~+2.9% on 1.3B and ~+3.4% on 2.7B for one CU's worth of area, which
 is a quarter of what a big-kernel BS+1 costs. Worth trying as the fallback if the
 big-kernel bump misses timing.
+
+### Build A result — `2026.08.28-1203`, 370M NS=1 BS=14x3+6 + silu PISO
+
+Finished 6:30 PM, 6h 28m. Kernel-scoped (`level0_i/.../ternip_ip_1`):
+**WNS 0.000, TNS 0.000, 0 failing endpoints**, AUTO-FREQ-SCALING-04 count **0**,
+so it holds 300 MHz. It closes — with exactly zero margin.
+
+**NS=1 is net-negative for 370M and should not ship.** The shipping NS=8 build at
+the same BS=14 closed at **+0.024**; this one closes at **0.000**. NS=1 removes
+core-interconnect pipeline stages, so this is the expected direction; the
+experiment's premise (NS=1 frees area for a higher BatchSize) does not pay for the
+24 ps it costs, because BS=14 is unchanged here. Revert 370M to NS=8.
+
+**Caveat — this build cannot price the silu PISO.** It changed two things at once
+vs the shipping build (NS 8->1 AND the new silu PISO), so +0.024 -> 0.000 is the
+*net* of the two. The PISO could be worth anywhere from ~0 to a lot, masked by
+whatever NS=1 cost. My earlier claim that A would "measure what the silu PISO is
+worth at D=1024" was wrong -- it is confounded. To price the PISO at 370M would
+need NS=8 + PISO, which is also exactly the build worth having, since it is the
+shipping config plus one improvement.
+
+Zero margin also rules out stacking anything on this configuration: NVR=8 costs
+43 ps and BS=15 costs more, so neither fits on top of NS=1.
+
+### Build B (running) — `2026.08.28-1844`, 2.7B BS=9x3+5 + silu PISO
+
+Kicked 6:44 PM, ETA ~1:00 AM. 2.7B already used NS=1 natively, so this build is a
+clean single-variable change from its validated +0.001 baseline: BatchSize 8 -> 9,
+plus the silu PISO the baseline lacked. Projected ~454 tok/s (+10.3%).
+Unlike A, this one IS interpretable: if it closes, both the PISO and the extra
+lanes are paid for; if it misses, the fallback is 2.7B at BS=8 with the PISO alone
+to book the margin, or small-kernel 5 -> 6 (+3.4%) as the cheaper lane.
+
+### Revised queue
+
+- **C**: 1.3B BS=11x3+5 + silu PISO (~+8.6%, ~907 tok/s)
+- **D**: 370M NS=8 (reverted) + silu PISO at BS=14 -- prices the PISO cleanly and
+  is the shipping config plus one improvement; if it shows margin >= 43 ps, NVR=8
+  or BS=15 goes on top next.
