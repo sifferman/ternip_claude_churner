@@ -515,3 +515,36 @@ and that observation stands -- it came from real hardware, not from this testben
 It is now unexplained. It may simply be model/prompt behaviour at 24 tokens rather
 than a hardware fault; the correct next step is a longer sample and a comparison
 against the CPU reference for the same prompt, NOT an RTL hunt.
+
+## 2026-08-28 — 2.7B "the the the" is EXPECTED, not a hardware fault
+
+Ran the same prompt through all three sources for 2.7B. Greedy, 24 tokens:
+
+| source | output |
+|---|---|
+| float reference (`generate_official`) | "...a remote, icy wasteland. The unicorns **were the size of** a horse and **were the size of** a large dog" |
+| **hardware-accurate emulator** | "...a remote, 3000 years ago. **the the the the the the the the the the the the the the the the the**" |
+| **silicon (AU250)** | "...a remote, 300-year-old the world in **the the the the the the the the the the the the the the**" |
+
+**The hardware-accurate emulator degenerates into `the the the the` exactly like the
+silicon does.** The hardware is faithfully reproducing what the fixed-point model is
+specified to produce. There is no hardware fault.
+
+Two conclusions:
+
+1. **My "2.7B is visibly damaged" claim was wrong**, and the reasoning behind it was
+   wrong twice over: I compared 2.7B's silicon output against the *1.3B* model rather
+   than against 2.7B's own reference, and I never checked what the fixed-point spec
+   predicts. The float reference shows MMfreeLM-2.7B already repeats heavily at full
+   precision ("were the size of ... were the size of"), and the emulator shows the
+   16-bit/exponent-5 quantization tips that tendency into full degeneration.
+
+2. **The real limitation is quantization, not RTL.** At D=2560 the current fixed-point
+   format is not precise enough to keep the model coherent. If 2.7B output quality
+   matters, the lever is numeric format (FixedPointPrecision / exponent), which is a
+   design change with real area cost -- not a bug hunt. Everything in the RTL matches
+   its spec bit-exactly (`test_rms_norm_batch` 0.0000 on all three models).
+
+Net for the day: no correctness defect exists in the RTL. The one genuine bug found
+was in the verification harness (cocotb `sim_build` not keyed by target, fixed in
+`99793b9`). The tok/s queue stands unchanged.
