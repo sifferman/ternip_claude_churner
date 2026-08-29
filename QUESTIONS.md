@@ -429,3 +429,37 @@ DivInternalPrecision + 16` feeding the fixed-latency equalizer.
 rather than acted on unilaterally: the two large models' throughput numbers are
 real, but they are throughput on a datapath that disagrees with the reference
 model. Awaiting the user's call on whether to divert to the bug.
+
+## 2026-08-28 — silicon answer: yes it generates text, but 2.7B is visibly damaged
+
+Ran `generate_pynqvivado.py` on the U250 (gpu01) for all three models, each with its
+md5-verified bitstream and `loaded.xclbin` deleted first. Same prompt, greedy, 24 tokens:
+
+| model | D | rms test | greedy continuation |
+|---|---:|---|---|
+| 370M | 1024 | **PASS** (exact) | "...a remote, 20-year-old forest in the Andes of Brazil. They were able to find their way through the j" |
+| 1.3B | 2048 | FAIL (~1.7) | "...a remote, 1970s-era California ranch. The herd were all female and all had been born with their mother" |
+| 2.7B | 2560 | FAIL (~2.6) | "...a remote, 300-year-old **the world in the the the the the the the the the the the the the the**" |
+
+**370M and 1.3B are coherent. 2.7B degenerates into `the the the the`** -- the classic
+signature of a numerically damaged model. Its sampled output is also weak
+("16th century village. in the UK. The unicorns were the only animals in the village in the").
+
+The decisive point: **2.7B is the LARGER model and should produce BETTER text than
+1.3B. It produces markedly worse.** And the quality ordering tracks the rms error
+magnitude exactly -- 370M exact/best, 1.3B moderate error/coherent, 2.7B largest
+error/degenerate. That is a real defect materially hurting the flagship model, not a
+tolerance artifact in the testbench.
+
+Caveat: 24 tokens is a short sample. But greedy decoding is deterministic, and a 2.7B
+collapsing on the standard unicorn prompt while a 1.3B handles it cleanly is not the
+kind of thing that happens by chance.
+
+**Revised priority.** The 2.7B BatchSize work (build B, +10% tok/s) is optimizing the
+throughput of a model whose output is degenerate. Fixing the D>=2048 rms defect is
+worth more than any remaining tok/s lever on that model, and it likely also lifts 1.3B
+quality. Recommend: let build B finish (it is 5h in and costs nothing extra), then
+divert to the rms bug rather than kicking 1.3B BS=11.
+
+Runtime state left on gpu01: `~/ternip_run/kernel.xclbin` currently holds the **370M**
+BS=14 bitstream (`1483936d...`); `kernel_bs10.xclbin` = 1.3B, `kernel_2_7B.xclbin` = 2.7B.
