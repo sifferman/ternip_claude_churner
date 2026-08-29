@@ -381,3 +381,51 @@ to book the margin, or small-kernel 5 -> 6 (+3.4%) as the cheaper lane.
 - **D**: 370M NS=8 (reverted) + silu PISO at BS=14 -- prices the PISO cleanly and
   is the shipping config plus one improvement; if it shows margin >= 43 ps, NVR=8
   or BS=15 goes on top next.
+
+## 2026-08-28 evening — `test_rms_norm_batch` FAILS for D>=2048 (pre-existing)
+
+Running the cocotb gate against the real board targets (not just `d512_1core`)
+turned up a correctness failure that the old CI matrix could never have seen:
+
+| model | D | `test_rms_norm_batch` |
+|---|---:|---|
+| 370M | 1024 | **PASS** -- exact, `max abs(HW-emu) = 0.0000` on every lane |
+| 1.3B | 2048 | **FAIL** -- `max abs(HW-emu) ~ 1.7` |
+| 2.7B | 2560 | **FAIL** -- `max abs(HW-emu) ~ 1.7-2.6` |
+
+**Not caused by the BatchSize bump.** 2.7B fails identically at its validated
+BS=8 and at the new BS=9, so this is pre-existing and equally true of the shipping
+2.7B bitstream. Build B was left running for that reason -- it does not make
+anything worse.
+
+**Not the known b>0 bug either**, despite the test's `*** FAIL (b>0 rms bug) ***`
+label: **lane b=0 fails too**, so the message is misleading here and the label
+should probably be reworded. The failure is on every lane, not the b>0 subset.
+
+**Which side is wrong: most likely the RTL.** The emulator is independently
+validated against the MMfreeLM reference by CI's `test_emulator`, which passes
+144/144 for 1.3B with its real model. So the emulator agrees with the reference
+while the RTL disagrees with the emulator. Also telling: at D=1024 the emulator
+reproduces the RTL *bit-exactly* (0.0000), so the model is a faithful model of
+this datapath -- it only diverges once D crosses 2048.
+
+**This is very likely the long-standing D=2048/2560 FPGA<->emulator divergence**,
+which until now was only observed on silicon and described as "starts at layer 0".
+It now reproduces in a ~6 minute RTL sim, isolated to a single FU, with a
+per-lane numeric diff -- a far better debugging position than a full-model run.
+
+Direction of the error: HW output is consistently *smaller* than the emulator
+(1.3B lane 0: HW `[0.031 -0.438 0.25]` vs emu `[0.094 -1.031 0.531]`), i.e. the
+hardware's rms divisor is too large. What I checked and did NOT find a smoking gun
+in: `RmsAccumulatorWidth = 2*P + clog2(D) + 1` does scale with D (43/44/45 bits)
+and is wide enough for D squares; `rms_sqa_sum_t` is 32-bit and the squares cannot
+saturate it. The remaining suspects are the `ternip_div` derived widths, which are
+where D actually enters (`ALeftShiftAmount = InBPrecision+2`, so
+`DivInternalPrecision` = 62 at D=1024 but 64 at D=2048/2560, crossing the
+even/odd `DIV_BSG` adjustment), and `RawDivideLatencyUpperBound =
+DivInternalPrecision + 16` feeding the fixed-latency equalizer.
+
+**This is a correctness question that outranks tok/s**, so it is flagged here
+rather than acted on unilaterally: the two large models' throughput numbers are
+real, but they are throughput on a datapath that disagrees with the reference
+model. Awaiting the user's call on whether to divert to the bug.
