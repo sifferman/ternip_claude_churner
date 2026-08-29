@@ -619,3 +619,43 @@ list and the change invalidates every existing bitstream. That one wants a decis
 not a unilateral 6.5-hour build. It is the obvious next kick once approved -- and note
 the right first build for it is 2.7B at BS=9 with exponent -7, changing only the
 exponent from the build that just closed.
+
+## 2026-08-29 — FixedPointExponent: CORRECTION to my reasoning, but -7 still wins
+
+I claimed -5 "wastes" range on +/-1024 that activations never approach. **That was
+wrong.** Measured directly by hooking `Emulator._format_register` (every register
+write passes through it) across a 2.7B generation:
+
+```
+max_abs_activation = 932.94   -> only 1.1x headroom at exp=-5
+```
+
+-5 is already near saturation, and every smaller exponent clips. The -7 improvement is
+NOT free headroom being recovered; it is a genuine precision-vs-range trade that
+happens to fall the right way, because the outliers are vanishingly rare:
+
+| exponent | resolution | clipped | fraction of 1.75e9 | 2.7B text |
+|---|---:|---:|---:|---|
+| **-5 (current)** | 0.031 | 0 | 0% | **degenerate ("the the the")** |
+| -6 | 0.016 | 1,476 | 0.000084% | coherent |
+| **-7** | 0.0078 | 15,408 | 0.00088% | coherent, longest |
+| -8 | 0.0039 | 84,942 | 0.0049% | coherent |
+
+4x the resolution everywhere, for clipping under 1 in 100,000 values. All three models
+stay healthy at -7 (1.3B: "icy wasteland that's been frozen for hundreds of thousands
+of years."; 370M: "icy world called the 'Unicorns' of the Milky Way Galaxy."), and all
+three now reach "icy" like the float reference does.
+
+**Recommendation: FixedPointExponent = -7 globally.** -6 is the conservative fallback
+(17x less clipping, text already coherent) if -7 ever shows instability on other
+prompts. Note the sample is one prompt at 24 tokens per model -- worth a multi-prompt
+check before treating -7 as settled, since saturation behaviour is input-dependent in a
+way resolution is not.
+
+Area cost is still zero: every width derives from `FixedPointPrecision`, never from the
+exponent. Timing should still be re-verified since constants change.
+
+**Next kick (after build C):** 2.7B at BS=9 with exponent -7 -- single-variable change
+from the build that just closed and passed silicon, so the result is unambiguous.
+User has approved moving off -5 ("if -5 isn't good, then let's do something that does
+work"), so this no longer needs the allowed-list caveat.
