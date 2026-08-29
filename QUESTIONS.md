@@ -463,3 +463,55 @@ divert to the rms bug rather than kicking 1.3B BS=11.
 
 Runtime state left on gpu01: `~/ternip_run/kernel.xclbin` currently holds the **370M**
 BS=14 bitstream (`1483936d...`); `kernel_bs10.xclbin` = 1.3B, `kernel_2_7B.xclbin` = 2.7B.
+
+## 2026-08-28 late — RETRACTION: there is no rms bug
+
+**The D>=2048 rms failure I reported was my own testbench error, not an RTL defect.**
+Retracting it in full.
+
+Instrumenting `ternip_rms`'s divider inputs gave it away immediately. Running the
+1.3B target printed:
+
+```
+RMSDBG D=1024 len=2048 accw=43     <-- hardware elaborated for D=1024, software sending 2048
+```
+
+`Cfg.D` was **1024** while `rms_length` was **2048**: the 1.3B software was driving a
+**370M-elaborated design**. cocotb's `SIM_BUILD` defaults to a fixed `sim_build`
+directory that is NOT keyed by `TARGET`, and I ran 370M first without clearing it,
+so every subsequent target silently reused the 370M hardware.
+
+With a clean build directory, all three pass bit-exactly:
+
+| model | D | `test_rms_norm_batch` |
+|---|---:|---|
+| 370M | 1024 | PASS, `max abs(HW-emu) = 0.0000` |
+| 1.3B | 2048 | **PASS, 0.0000 every lane** |
+| 2.7B | 2560 | **PASS, 0.0000 every lane** |
+
+`RMSDBG D=2048 len=2048 accw=44` and `D=2560 len=2560 accw=45` confirm the widths
+scale correctly, exactly as the localparams said they would.
+
+### The real bug, and the fix
+
+The genuine defect was in the harness: **switching `TARGET` silently ran the previous
+target's elaborated design.** That is worse than a false alarm -- it can also hide a
+real regression, by passing a broken design against a stale good build.
+
+Fixed on `larger-model-fixes` (`99793b9`): `SIM_BUILD` is now keyed to a hash of the
+resolved `TERNIP_CFG` + defines, so each config gets its own directory
+(370M `303d0d68a71d`, 1.3B `cacd2c5c68c5`, 2.7B `2751f9ce0453`). Regression-tested by
+running 370M then 1.3B back-to-back with no manual clean: both PASS, which is exactly
+the sequence that produced the false failure before.
+
+This mattered more than usual because the CI change earlier today made "run the gate
+against several real targets in one session" the normal workflow -- previously the
+matrix used one config per job, so the bug was latent.
+
+### What this does NOT explain
+
+The 2.7B silicon generation is still degenerate ("the the the the" under greedy),
+and that observation stands -- it came from real hardware, not from this testbench.
+It is now unexplained. It may simply be model/prompt behaviour at 24 tokens rather
+than a hardware fault; the correct next step is a longer sample and a comparison
+against the CPU reference for the same prompt, NOT an RTL hunt.
