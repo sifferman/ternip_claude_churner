@@ -592,3 +592,30 @@ generates text and flags degenerate repetition.
   checked at -7/-8 for regressions before recommending a global change.
 - Timing should be re-verified: constants change, so logic differs slightly even
   though widths do not.
+
+## 2026-08-29 01:16 — Build B RESULT: 2.7B BS=9 CLOSES (+10.3% tok/s)
+
+`2026.08.28-1844`, 6h 29m. Kernel-scoped: **WNS 0.000, TNS 0.000, 0 failing
+endpoints**, AUTO-FREQ-SCALING-04 count 0 -> holds 300 MHz.
+
+| | before | after |
+|---|---:|---:|
+| BatchSize | 8x3+5 (29 lanes) | **9x3+5 (32 lanes)** |
+| tok/s (projected from measured) | 411.35 | **~454** |
+| WNS | +0.001 | 0.000 |
+
+The silu PISO paid for exactly the 3 extra lanes: 2.7B was at +0.001 with BS=8 and no
+PISO, and is at 0.000 with BS=9 and PISO. Zero margin again, so BS=10 is not available
+without finding more slack. Needs silicon validation before the number is real.
+
+## Build C kicked — `2026.08.29-0130`, 1.3B BS=11x3+5
+
+Same single-variable change on the other big model: 35 -> 38 lanes, ~907 tok/s
+(+8.6%) if it closes. Lint passed. ETA ~8:00 AM.
+
+Deliberately did NOT kick the FixedPointExponent=-7 experiment, even though it is the
+higher-impact finding, because the exponent is not on CLAUDE.md's allowed-to-modify
+list and the change invalidates every existing bitstream. That one wants a decision,
+not a unilateral 6.5-hour build. It is the obvious next kick once approved -- and note
+the right first build for it is 2.7B at BS=9 with exponent -7, changing only the
+exponent from the build that just closed.
