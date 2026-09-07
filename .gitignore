@@ -7,14 +7,40 @@ ternip/**/build/
 ternary_matmul/build/
 ternary_matmul/**/build/
 
-# Local hard_N artifacts (committed as release assets, not tree files)
-hard_*.csv
-hard_*.log
-hard_*.xlsx
+# Local per-iteration artifacts (committed as release assets, not tree files)
+# Matches YYYY.MM.DD-HHMM-style date-code tags + legacy build_*.
+20*.csv
+20*.log
+20*.xlsx
+build_*.csv
+build_*.log
+build_*.xlsx
 build.log
 build.tar.gz
+artifacts/
+
+# Vivado / Vitis stray artifacts (any run that leaves these in the
+# repo tree should leave NO trace -- we collect named CSVs into
+# artifacts/ and tar the build dir into release assets instead)
+vivado.jou
+vivado.log
+vivado_*.backup.jou
+vivado_*.backup.log
+.Xil/
+.cache/
+*.jou
+*.dot
+synth.json
+timing_report.txt
+timing_report.rpv
+tight_timing_paths.txt
+fanout_report.txt
+*.rpv
+*.rpx
+*.rdf
 
 # Editor / OS noise
 *.swp
 *~
 .DS_Store
+hw_emu.log

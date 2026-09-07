@@ -17,7 +17,7 @@ The CSV column format matches Vivado's GUI **Reports → Timing → Timing Summa
 From,Name,Slack,Levels,High Fanout,To,Total Delay,Logic Delay,Net Delay,Requirement,Source Clock,Destination Clock,Exception,Clock Uncertainty
 ```
 
-That's the same format as this project's existing `hard_N.csv` files, so the output can be fed straight into the same clustering analysis scripts.
+That's the same format as this project's existing `build_N.csv` files, so the output can be fed straight into the same clustering analysis scripts.
 
 ## When to use
 
@@ -121,7 +121,7 @@ vivado -mode batch -nojournal -nolog \
     level0_i/level1/level1_i/ulp/ternip_ip_1
 ```
 
-Expected: WNS/TNS values that roughly match the most recent `hard_*.csv` you exported manually, and `wc -l /tmp/vrr_test.csv` = NFAIL + 1.
+Expected: WNS/TNS values that roughly match the most recent `build_*.csv` you exported manually, and `wc -l /tmp/vrr_test.csv` = NFAIL + 1.
 
 ## Output format reference
 
@@ -133,4 +133,4 @@ some/path/cell/Q,Path 1,-0.572,4,323,some/other/path/D,3.16,0.47,2.69,3.33,kerne
 ...
 ```
 
-Existing project examples: `hard_5.csv`, `hard_6.csv`, `hard_8.csv`, `hard_9.csv` at the project root. The skill's output should be analyzable by the same Python clustering scripts that the user has been using on those files.
+Existing project examples: `build_5.csv`, `build_6.csv`, `build_8.csv`, `build_9.csv` at the project root. The skill's output should be analyzable by the same Python clustering scripts that the user has been using on those files.

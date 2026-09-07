@@ -6,7 +6,7 @@
 
 set -euo pipefail
 
-CONFIG="${1:-xcu250_D=1024_OneCore}"
+CONFIG="${1:-xcu250_D=1024_MaxCores}"
 REPO_DIR="/soe/esifferm/GitHub/ternip_claude"
 PROJECT_DIR="$REPO_DIR/ternary_matmul"
 LOG="$REPO_DIR/build.log"

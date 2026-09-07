@@ -1,0 +1,5 @@
+# All references/ submodules are vendored external code (style guides,
+# Vivado docs, example FPGA projects, yosys source). Exclude from
+# GitHub's language statistics so the repo's stats reflect only this
+# project's own code.
+references/** linguist-vendored

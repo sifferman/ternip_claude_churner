@@ -4,7 +4,7 @@
 # wraps: kick build, poll, collect, release.
 #
 # Usage: scripts/iterate.sh <tag> <title> [config]
-#   tag    = release tag (e.g. hard_16)
+#   tag    = release tag (e.g. build_16)
 #   title  = release title (one-line summary of the change)
 #   config = build CONFIG, default xcu250_D=1024_MaxCores
 

@@ -26,3 +26,18 @@
 [submodule "references/yosys"]
 	path = references/yosys
 	url = git@github.com:YosysHQ/yosys.git
+[submodule "references/ThunderGP"]
+	path = references/ThunderGP
+	url = git@github.com:Xtra-Computing/ThunderGP.git
+[submodule "references/halalboro-fpga-accelerators"]
+	path = references/halalboro-fpga-accelerators
+	url = git@github.com:halalboro/fpga-accelerators.git
+[submodule "references/simplitis"]
+	path = references/simplitis
+	url = git@github.com:drichmond/simplitis.git
+[submodule "references/analogdevicesinc-hdl"]
+	path = references/analogdevicesinc-hdl
+	url = git@github.com:analogdevicesinc/hdl.git
+[submodule "references/RapidWright"]
+	path = references/RapidWright
+	url = org-3189299@github.com:Xilinx/RapidWright.git
