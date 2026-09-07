@@ -150,22 +150,25 @@ See [STYLE.md](STYLE.md). The non-negotiables:
 
 ## Recording an iteration
 
-Every iteration gets a GitHub release tagged `YYYY.MM.DD-HHMM`, taken from
-`build.log`'s first `Run vpl: Step create_project: Started` marker. The body
-must carry WNS / TNS / failing-endpoint count, achieved frequency and
-AUTO-FREQ-SCALING status, projected tok/s before and after, and utilization.
+**Release only the builds that close.** A build that misses timing gets its
+reports staged to `artifacts/<datecode>/` and nothing more. Releases live at
+https://github.com/sifferman/ternip_claude_churner/releases and are meant to
+answer one question: which bitstreams work. Of 202 historical releases only 63
+carry a tarball, which is exactly why the list stopped meaning anything.
 
-**Attach the build tarball.** Split with `split -b 1800M` past GitHub's 2 GB
-limit. Only 63 of 202 historical releases carry one, which is why 61 GB of local
-artifacts are irreplaceable.
+On a close, tag `YYYY.MM.DD-HHMM` from `build.log`'s first
+`Run vpl: Step create_project: Started` marker, and **attach the build
+directory including `kernel.xclbin`**. Exclude `hw_emu/`; `split -b 1800M` past
+GitHub's 2 GB asset limit and attach every part.
 
-**Tag the config in the title and in a `Config` row**, and source every staged
-file from that config's own build directory. Mixing configs in one release
-silently misleads.
+The body carries WNS / TNS / failing-endpoint count, achieved frequency and
+AUTO-FREQ-SCALING status, lanes and tok/s, and utilization. **Tag the config in
+the title and in a `Config` row**, and source every staged file from that
+config's own build directory — mixing configs in one release silently misleads.
 
-Keep a results table for any multi-build search — config, WNS, TNS, failing
-count, tok/s, artifact datecode. Overwriting a descriptor in place loses every
-intermediate config.
+Every build, pass or fail, goes in the search's results table: config, WNS, TNS,
+failing count, tok/s, artifact datecode. Overwriting a descriptor in place loses
+every intermediate config.
 
 ## Working unsupervised
 
